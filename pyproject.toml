@@ -30,6 +30,9 @@ embed = [
 store = [
     "qdrant-client>=1.12",
 ]
+sources = [
+    "httpx>=0.28",
+]
 ui = [
     "streamlit>=1.40",
 ]
@@ -67,7 +70,7 @@ mypy_path = "src"
 packages = ["fashion"]
 
 [[tool.mypy.overrides]]
-module = ["open_clip.*", "qdrant_client.*", "rq.*", "streamlit.*", "google.genai.*"]
+module = ["open_clip.*", "qdrant_client.*", "rq.*", "streamlit.*", "google.*", "instaloader.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
