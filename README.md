@@ -76,8 +76,36 @@ Two `ImageSource` adapters ship:
 
 ## Status
 
-- P0 — foundation: ports, domain logic, fakes, tests ✅
-- P1 — seed dataset and index
-- P2 — photo → body analysis → retrieval → rationale
-- P3 — ImageRAG generation
-- P4 — virtual try-on
+| Phase | State |
+|---|---|
+| P0 — foundation: ports, domain logic, fakes, CI | done |
+| P1 — image sources, 1,995-celebrity roster, resumable ingest | done |
+| P2 — dual-vector index + hybrid retrieval (+ Qdrant) | done |
+| P3 — ImageRAG generation loop | done |
+| P2 tail — async API, worker, Streamlit UI | next |
+| P4 — virtual try-on | pending |
+| P5 — production hardening | pending |
+
+132 tests, ruff and mypy --strict clean.
+
+### What is real today
+
+`data/seed/celebrities.jsonl` holds 1,995 real celebrities (1,000 Indian, 598
+American, 397 British) fetched from Wikidata, each with a Commons-hosted image.
+32 of them are labelled end-to-end and indexed, and retrieval returns ranked,
+explained recommendations over that corpus.
+
+### What still needs you
+
+1. **A Gemini API key.** The 32 labelled items were produced by the *fake* VLM, so
+   their garment tags are meaningless. Get a free key at
+   [aistudio.google.com/apikey](https://aistudio.google.com/apikey), put it in `.env`,
+   then re-run ingest against a clean `labels.jsonl` for real labels.
+2. **Time, for the full corpus.** ~1,400 images/day fits the free tier, so labelling
+   all 1,995 takes about two days of wall-clock. Ingest is resumable, so run it in
+   chunks.
+3. **A decision on Instagram.** The adapter is written and tested but never runs by
+   default — see `docs/adr/0003`.
+4. **A decision on generation.** Everything through ImageRAG works against the null
+   provider; producing actual images needs the Colab worker (P3 hardware, not yet
+   written).
