@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Seed images are large and licence-encumbered; labels.jsonl IS tracked.
+data/seed/images/
+data/cache/
+qdrant_storage/
