@@ -31,6 +31,7 @@ from fashion.core.models import (
     OutfitItem,
     Silhouette,
     WaistEmphasis,
+    as_str_tuple,
 )
 from fashion.ports.vision import VisionModel
 
@@ -54,9 +55,7 @@ class RosterRow:
         image_url = str(row.get("image_url", ""))
         if not (ident and name and image_url):
             return None
-        return cls(
-            id=ident, name=name, region=str(row.get("region", "")), image_url=image_url
-        )
+        return cls(id=ident, name=name, region=str(row.get("region", "")), image_url=image_url)
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,10 +170,10 @@ class Ingestor:
                     occasion=_enum_or(  # type: ignore[arg-type]
                         tags.get("occasion"), Occasion, Occasion.CASUAL
                     ),
-                    colors=tuple(str(c) for c in (tags.get("colors") or ())),
-                    patterns=tuple(str(p) for p in (tags.get("patterns") or ())),
+                    colors=as_str_tuple(tags.get("colors")),
+                    patterns=as_str_tuple(tags.get("patterns")),
                     fabric=str(tags.get("fabric")) if tags.get("fabric") else None,
-                    style_tags=tuple(str(t) for t in (tags.get("style_tags") or ())),
+                    style_tags=as_str_tuple(tags.get("style_tags")),
                     caption=caption,
                     source=sourced.source,
                     license=sourced.license,

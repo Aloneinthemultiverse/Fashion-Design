@@ -125,9 +125,7 @@ class GeminiVisionModel:
         if self._cache_dir is None:
             return
         try:
-            (self._cache_dir / f"{key}.json").write_text(
-                json.dumps(value), encoding="utf-8"
-            )
+            (self._cache_dir / f"{key}.json").write_text(json.dumps(value), encoding="utf-8")
         except OSError:
             log.warning("could not write cache entry %s", key, exc_info=True)
 
@@ -213,9 +211,7 @@ class GeminiVisionModel:
         return str(self._analyze_all(image).get("caption", "")).strip()
 
     def find_gaps(self, generated: bytes, prompt: str) -> tuple[MissingConcept, ...]:
-        data = self._call(
-            "find_gaps", GAP_PROMPT.format(prompt=prompt), generated, GAP_SCHEMA
-        )
+        data = self._call("find_gaps", GAP_PROMPT.format(prompt=prompt), generated, GAP_SCHEMA)
         out: list[MissingConcept] = []
         for entry in data.get("missing", []) or []:
             concept = str(entry.get("concept", "")).strip()

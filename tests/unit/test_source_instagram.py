@@ -40,9 +40,7 @@ def test_refusal_message_states_the_actual_consequences(tmp_path: Path) -> None:
 
 def test_constructs_when_acknowledged_and_given_a_loader(tmp_path: Path) -> None:
     """An injected loader keeps construction offline and instaloader-free."""
-    source = InstagramImageSource(
-        tmp_path, i_accept_terms_risk=True, loader=object()
-    )
+    source = InstagramImageSource(tmp_path, i_accept_terms_risk=True, loader=object())
     assert isinstance(source, InstagramImageSource)
 
 
@@ -55,9 +53,7 @@ def test_rate_limiter_allows_up_to_its_budget_without_sleeping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     slept: list[float] = []
-    monkeypatch.setattr(
-        "fashion.adapters.source_instagram.time.sleep", lambda s: slept.append(s)
-    )
+    monkeypatch.setattr("fashion.adapters.source_instagram.time.sleep", lambda s: slept.append(s))
     limiter = _RateLimiter(5)
     for _ in range(5):
         limiter.acquire()
@@ -69,9 +65,7 @@ def test_rate_limiter_sleeps_once_the_budget_is_exhausted(
 ) -> None:
     """Exceeding the hourly budget is the most common way to get an account restricted."""
     slept: list[float] = []
-    monkeypatch.setattr(
-        "fashion.adapters.source_instagram.time.sleep", lambda s: slept.append(s)
-    )
+    monkeypatch.setattr("fashion.adapters.source_instagram.time.sleep", lambda s: slept.append(s))
     limiter = _RateLimiter(2)
     for _ in range(3):
         limiter.acquire()

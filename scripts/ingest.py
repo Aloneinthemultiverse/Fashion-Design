@@ -71,9 +71,7 @@ def main() -> int:
         if row is not None
     ]
     if not rows:
-        raise SystemExit(
-            f"no roster rows in {args.roster}. Run scripts/fetch_roster.py first."
-        )
+        raise SystemExit(f"no roster rows in {args.roster}. Run scripts/fetch_roster.py first.")
 
     ingestor = Ingestor(
         build_vision(args.vision),

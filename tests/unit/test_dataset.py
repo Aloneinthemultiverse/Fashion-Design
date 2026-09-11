@@ -121,3 +121,15 @@ def test_iter_jsonl_skips_corrupt_rows(tmp_path: Path) -> None:
 
 def test_iter_jsonl_on_missing_file_yields_nothing(tmp_path: Path) -> None:
     assert list(iter_jsonl(tmp_path / "absent.jsonl")) == []
+
+
+def test_as_str_tuple_handles_the_shapes_a_vlm_actually_returns() -> None:
+    """Payload fields are untyped; a bare string must not be split into characters."""
+    from fashion.core.models import as_str_tuple
+
+    assert as_str_tuple(None) == ()
+    assert as_str_tuple("crimson") == ("crimson",)
+    assert as_str_tuple(["crimson", "gold"]) == ("crimson", "gold")
+    assert as_str_tuple(("a",)) == ("a",)
+    assert as_str_tuple([1, 2]) == ("1", "2")
+    assert as_str_tuple(42) == ()

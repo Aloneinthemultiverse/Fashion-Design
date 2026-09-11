@@ -179,3 +179,20 @@ class MissingConcept(Frozen):
         if len(self.retrieval_caption) < len(self.concept):
             raise ValueError("retrieval_caption must be at least as detailed as concept")
         return self
+
+
+def as_str_tuple(value: object) -> tuple[str, ...]:
+    """Coerce an untyped payload field into a tuple of strings.
+
+    Both the VLM response and the vector-store payload are loosely typed `object`, and a
+    field that should be a list of colours can arrive as None, a bare string, or a list
+    of non-strings. Treating a bare string as a single item (rather than iterating its
+    characters) is the behaviour that matters here.
+    """
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, (list, tuple, set)):
+        return tuple(str(v) for v in value)
+    return ()

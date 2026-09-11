@@ -91,9 +91,7 @@ def test_small_images_are_rejected(source: WikimediaImageSource) -> None:
         "File:Diagram.svg",
     ],
 )
-def test_non_photographs_are_rejected_by_title(
-    source: WikimediaImageSource, title: str
-) -> None:
+def test_non_photographs_are_rejected_by_title(source: WikimediaImageSource, title: str) -> None:
     assert not source._is_plausible_outfit_photo(photo(title=title))
 
 
