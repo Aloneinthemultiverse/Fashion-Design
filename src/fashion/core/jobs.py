@@ -30,6 +30,9 @@ class JobState(StrEnum):
 class StageName(StrEnum):
     ANALYZE = "analyze"
     RETRIEVE = "retrieve"
+    # ImageRAG applied to retrieval: find what the request asked for that the results
+    # do not cover, and retrieve specifically for it. Runs without a GPU.
+    REFINE = "refine"
     GENERATE = "generate"
     TRYON = "tryon"
 

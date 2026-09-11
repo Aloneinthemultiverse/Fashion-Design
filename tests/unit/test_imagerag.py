@@ -22,6 +22,7 @@ from fashion.core.models import (
     Build,
     HeightBand,
     MissingConcept,
+    Recommendation,
     UserQuery,
 )
 from fashion.pipeline.imagerag import ImageRagGenerator
@@ -232,3 +233,157 @@ def test_references_are_not_reused_across_rounds(store: InMemoryVectorStore) -> 
     ).generate(UserQuery(text="a lehenga"), metrics())
 
     assert len(result.references) == len(set(result.references))
+
+
+# -- retrieval-only ImageRAG -------------------------------------------------------
+
+
+class GapVision(FakeVisionModel):
+    """Reports the named concepts as missing on the first pass, none afterwards."""
+
+    def __init__(self, *concepts: str) -> None:
+        self._concepts = concepts
+        self.calls = 0
+
+    def find_missing_concepts(self, request, found):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        if self.calls > 1:
+            return ()
+        return tuple(
+            MissingConcept(
+                concept=c,
+                retrieval_caption=f"A garment prominently featuring {c}, shown full length.",
+            )
+            for c in self._concepts
+        )
+
+
+def _refiner_corpus(tmp_path: Path):  # type: ignore[no-untyped-def]
+    embedder = FakeEmbedder()
+    store = InMemoryVectorStore()
+    store.ensure_collection(embedder.dim)
+    for item_id in ("a", "b", "c", "d"):
+        image = tmp_path / f"{item_id}.jpg"
+        image.write_bytes(f"bytes-{item_id}".encode())
+        store.upsert(
+            item_id,
+            OutfitVectors(
+                embedder.embed_image(image.read_bytes()),
+                embedder.embed_text(f"caption {item_id}"),
+            ),
+            {
+                "body_shape": "pear",
+                "image_path": str(image),
+                "culture": "ethnic",
+                "occasion": "festive",
+                "garment_type": "saree",
+                "silhouette": "a_line",
+                "neckline": "v_neck",
+                "waist_emphasis": "high",
+                "source": "test",
+                "license": "CC0",
+                "celebrity_id": f"c-{item_id}",
+            },
+        )
+    return embedder, store
+
+
+def test_refiner_runs_without_any_generator(tmp_path: Path) -> None:
+    """The whole point: ImageRAG's contribution stops depending on a GPU."""
+    from fashion.pipeline.imagerag import ImageRagRefiner
+
+    embedder, store = _refiner_corpus(tmp_path)
+    result = ImageRagRefiner(GapVision("dupatta"), embedder, store).refine(
+        "a lehenga with a dupatta", metrics(), []
+    )
+    assert result.added
+    assert result.rounds >= 1
+
+
+def test_gap_retrieval_uses_the_dense_caption(tmp_path: Path) -> None:
+    """Same finding as the generation loop: retrieve on the caption, not the concept."""
+    from fashion.pipeline.imagerag import ImageRagRefiner
+
+    _, store = _refiner_corpus(tmp_path)
+    embedder = RecordingEmbedder()
+    ImageRagRefiner(GapVision("dupatta"), embedder, store).refine(
+        "a lehenga with a dupatta", metrics(), []
+    )
+    assert any("prominently featuring dupatta" in t for t in embedder.texts)
+    assert "dupatta" not in embedder.texts
+
+
+def test_added_items_say_which_gap_they_fill(tmp_path: Path) -> None:
+    """A user should be able to see why an extra suggestion appeared."""
+    from fashion.pipeline.imagerag import ImageRagRefiner
+
+    embedder, store = _refiner_corpus(tmp_path)
+    result = ImageRagRefiner(GapVision("dupatta"), embedder, store).refine(
+        "a lehenga with a dupatta", metrics(), []
+    )
+    assert all(r.matched_on == ("gap:dupatta",) for r in result.added)
+
+
+def test_unfillable_gaps_are_reported_not_hidden(tmp_path: Path) -> None:
+    """'No outfit here has that' is useful; silently returning the nearest is not."""
+    from fashion.pipeline.imagerag import ImageRagRefiner
+
+    embedder = FakeEmbedder()
+    empty = InMemoryVectorStore()
+    empty.ensure_collection(embedder.dim)
+    result = ImageRagRefiner(GapVision("dupatta"), embedder, empty).refine(
+        "a lehenga with a dupatta", metrics(), []
+    )
+    assert result.unmet == ("dupatta",)
+    assert result.added == ()
+
+
+def test_already_recommended_items_are_not_repeated(tmp_path: Path) -> None:
+    from fashion.pipeline.imagerag import ImageRagRefiner
+    from fashion.pipeline.retrieve import _outfit_from_payload
+
+    embedder, store = _refiner_corpus(tmp_path)
+    hit = store.search(embedder.embed_image(b"bytes-a"), limit=1)[0]
+    item = _outfit_from_payload(hit.id, hit.payload)
+    assert item is not None
+    existing = [Recommendation(outfit=item, score=1.0)]
+
+    result = ImageRagRefiner(GapVision("dupatta"), embedder, store).refine(
+        "a lehenga with a dupatta", metrics(), existing
+    )
+    assert all(r.outfit.id != item.id for r in result.added)
+
+
+def test_an_empty_request_skips_refinement(tmp_path: Path) -> None:
+    from fashion.pipeline.imagerag import ImageRagRefiner
+
+    embedder, store = _refiner_corpus(tmp_path)
+    result = ImageRagRefiner(GapVision("dupatta"), embedder, store).refine("   ", metrics(), [])
+    assert result.skipped_reason
+    assert result.added == ()
+
+
+def test_a_failing_gap_analysis_degrades_rather_than_raising(tmp_path: Path) -> None:
+    from fashion.pipeline.imagerag import ImageRagRefiner
+
+    embedder, store = _refiner_corpus(tmp_path)
+
+    class Broken(FakeVisionModel):
+        def find_missing_concepts(self, request, found):  # type: ignore[no-untyped-def]
+            raise RuntimeError("quota exhausted")
+
+    result = ImageRagRefiner(Broken(), embedder, store).refine("a saree", metrics(), [])
+    assert result.skipped_reason
+    assert result.added == ()
+
+
+def test_the_loop_stops_when_no_new_gaps_appear(tmp_path: Path) -> None:
+    """Re-reporting a gap already examined would loop on the same failed retrieval."""
+    from fashion.pipeline.imagerag import ImageRagRefiner
+
+    embedder, store = _refiner_corpus(tmp_path)
+    vision = GapVision("dupatta")
+    result = ImageRagRefiner(vision, embedder, store, max_rounds=5).refine(
+        "a lehenga with a dupatta", metrics(), []
+    )
+    assert result.rounds <= 2

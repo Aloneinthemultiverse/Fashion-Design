@@ -42,6 +42,7 @@ def test_progress_counts_settled_stages() -> None:
     job = Job()
     job.finish_stage(StageName.ANALYZE)
     job.finish_stage(StageName.RETRIEVE)
+    job.finish_stage(StageName.REFINE, state=StageState.SKIPPED)
     job.finish_stage(StageName.GENERATE, state=StageState.SKIPPED)
     job.finish_stage(StageName.TRYON, state=StageState.FAILED)
     assert job.progress == 1.0

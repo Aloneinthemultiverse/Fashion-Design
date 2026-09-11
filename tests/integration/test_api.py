@@ -122,7 +122,13 @@ def test_polling_returns_stage_by_stage_progress(client: TestClient) -> None:
 
     assert body["state"] == "done"
     assert body["progress"] == 1.0
-    assert [s["name"] for s in body["stages"]] == ["analyze", "retrieve", "generate", "tryon"]
+    assert [s["name"] for s in body["stages"]] == [
+        "analyze",
+        "retrieve",
+        "refine",
+        "generate",
+        "tryon",
+    ]
 
 
 def test_analyze_stage_publishes_body_metrics(client: TestClient) -> None:

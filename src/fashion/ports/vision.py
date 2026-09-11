@@ -40,6 +40,20 @@ class VisionModel(Protocol):
         """Explain why this outfit suits this body."""
         ...
 
+    def find_missing_concepts(
+        self, request: str, found: tuple[str, ...]
+    ) -> tuple[MissingConcept, ...]:
+        """Name what the request asks for that the retrieved outfits do not show.
+
+        The text-only counterpart of `find_gaps`. ImageRAG's gap analysis is defined
+        against a generated image, but the same idea applies to a result set, and this
+        form needs no GPU -- which is what lets the method run at all on a CPU-only
+        deployment.
+
+        Returns an empty tuple when the results already cover the request.
+        """
+        ...
+
     def expand_query(self, text: str, n: int = 3) -> tuple[str, ...]:
         """Rewrite one request as several differently-phrased searches.
 

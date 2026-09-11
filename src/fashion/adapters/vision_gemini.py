@@ -274,3 +274,55 @@ class GeminiVisionModel:
             if str(q).strip() and str(q).strip().casefold() != query.casefold()
         ]
         return (query, *variants[:n])
+
+    def find_missing_concepts(
+        self, request: str, found: tuple[str, ...]
+    ) -> tuple[MissingConcept, ...]:
+        """Text-only gap analysis over a result set.
+
+        Cheap compared with the image path -- no picture is uploaded -- and cached like
+        every other call, so a repeated search costs no quota.
+        """
+        if not request.strip():
+            return ()
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "missing": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "concept": {"type": "string"},
+                            "retrieval_caption": {"type": "string"},
+                        },
+                        "required": ["concept", "retrieval_caption"],
+                    },
+                }
+            },
+            "required": ["missing"],
+        }
+        listing = chr(10).join(f"- {item}" for item in found) or "- (nothing retrieved)"
+        prompt = (
+            "A user asked for an outfit. These are the outfits found for them.{nl}{nl}"
+            "Request: {request}{nl}{nl}"
+            "Found:{nl}{listing}{nl}{nl}"
+            "List the concepts the request calls for that none of the found outfits "
+            "provide. For each, write a retrieval_caption: a rich visual description of "
+            "that concept alone, as it should appear, suitable for finding a photograph "
+            "of it. The caption must be substantially more detailed than the concept "
+            "name. Return an empty list if the results already satisfy the request."
+        ).format(nl=chr(10), request=request, listing=listing)
+
+        data = self._call("find_missing_concepts", prompt, None, schema)
+        out: list[MissingConcept] = []
+        for entry in data.get("missing", []) or []:
+            concept = str(entry.get("concept", "")).strip()
+            caption = str(entry.get("retrieval_caption", "")).strip()
+            if not concept or not caption:
+                continue
+            if len(caption) < len(concept):
+                caption = f"{concept}: {caption}".strip()
+            out.append(MissingConcept(concept=concept, retrieval_caption=caption))
+        return tuple(out)

@@ -17,17 +17,48 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from fashion.core.jobs import Job, JobStore, StageName, StageState
-from fashion.core.models import BodyMetrics, BodyShape, CelebrityProfile, UserQuery
+from fashion.core.models import (
+    BodyMetrics,
+    BodyShape,
+    CelebrityProfile,
+    Recommendation,
+    UserQuery,
+)
 from fashion.core.reference import BodyReferenceResolver
-from fashion.pipeline.imagerag import ImageRagGenerator
+from fashion.pipeline.imagerag import ImageRagGenerator, ImageRagRefiner
 from fashion.pipeline.retrieve import Retriever
 from fashion.ports.embedder import Embedder
 from fashion.ports.generation import GenerationProvider
 from fashion.ports.tryon import TryOnProvider
-from fashion.ports.vectorstore import VectorStore
+from fashion.ports.vectorstore import Filter, VectorStore
 from fashion.ports.vision import VisionModel
 
 log = logging.getLogger(__name__)
+
+
+def as_payload(rec: Recommendation) -> dict[str, object]:
+    """Flatten a recommendation for the job result.
+
+    Shared by the retrieve and refine stages so the two cannot drift into emitting
+    differently-shaped records for the same kind of thing.
+    """
+    return {
+        "outfit_id": rec.outfit.id,
+        "celebrity_id": rec.outfit.celebrity_id,
+        "garment_type": rec.outfit.garment_type,
+        "silhouette": rec.outfit.silhouette.value,
+        "neckline": rec.outfit.neckline.value,
+        "culture": rec.outfit.culture.value,
+        "occasion": rec.outfit.occasion.value,
+        "colors": list(rec.outfit.colors),
+        "image_path": rec.outfit.image_path,
+        "score": rec.score,
+        "rationale": rec.rationale,
+        "adjustments": list(rec.adjustments),
+        "matched_on": list(rec.matched_on),
+        "source": rec.outfit.source,
+        "license": rec.outfit.license,
+    }
 
 
 @dataclass
@@ -41,6 +72,9 @@ class RecommendationPipeline:
     # Profiles for resolving a named body reference. Empty means the feature is simply
     # unavailable, which the stage reports rather than failing over.
     profiles: dict[str, CelebrityProfile] = field(default_factory=dict)
+    # Carried between the retrieve and refine stages so refinement works on the objects
+    # rather than re-parsing its own output.
+    _last_recommendations: tuple[Recommendation, ...] = field(default=(), init=False, repr=False)
 
     def run(
         self,
@@ -60,6 +94,8 @@ class RecommendationPipeline:
         recommendations = self._retrieve(job, metrics, query, photo, reference_image)
         if recommendations is None:
             return job
+
+        recommendations = self._refine(job, metrics, query, recommendations)
 
         self._generate(job, query, metrics, enabled=want_generation)
         self._tryon(job, photo, recommendations, enabled=want_tryon)
@@ -175,26 +211,8 @@ class RecommendationPipeline:
             self.jobs.save(job)
             return None
 
-        payload: list[dict[str, object]] = [
-            {
-                "outfit_id": rec.outfit.id,
-                "celebrity_id": rec.outfit.celebrity_id,
-                "garment_type": rec.outfit.garment_type,
-                "silhouette": rec.outfit.silhouette.value,
-                "neckline": rec.outfit.neckline.value,
-                "culture": rec.outfit.culture.value,
-                "occasion": rec.outfit.occasion.value,
-                "colors": list(rec.outfit.colors),
-                "image_path": rec.outfit.image_path,
-                "score": rec.score,
-                "rationale": rec.rationale,
-                "adjustments": list(rec.adjustments),
-                "matched_on": list(rec.matched_on),
-                "source": rec.outfit.source,
-                "license": rec.outfit.license,
-            }
-            for rec in result.recommendations
-        ]
+        self._last_recommendations = result.recommendations
+        payload: list[dict[str, object]] = [as_payload(rec) for rec in result.recommendations]
 
         job.finish_stage(
             StageName.RETRIEVE,
@@ -213,6 +231,70 @@ class RecommendationPipeline:
         )
         self.jobs.save(job)
         return payload
+
+    def _refine(
+        self,
+        job: Job,
+        metrics: BodyMetrics,
+        query: UserQuery,
+        recommendations: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        """ImageRAG's gap loop, run over the result set rather than a generated image."""
+        job.start_stage(StageName.REFINE)
+        self.jobs.save(job)
+
+        if not query.text.strip():
+            job.finish_stage(
+                StageName.REFINE,
+                state=StageState.SKIPPED,
+                detail="No text request, so there is nothing to check the results against.",
+            )
+            self.jobs.save(job)
+            return recommendations
+
+        try:
+            result = ImageRagRefiner(self.vision, self.embedder, self.store).refine(
+                query.text,
+                metrics,
+                self._last_recommendations,
+                where=Filter(
+                    must_equal={
+                        key: value
+                        for key, value in (
+                            ("body_shape", metrics.shape.value),
+                            ("region", query.region or ""),
+                        )
+                        if value
+                    }
+                ),
+            )
+        except Exception as exc:
+            log.warning("refinement failed", exc_info=True)
+            job.finish_stage(StageName.REFINE, state=StageState.FAILED, detail=str(exc)[:200])
+            self.jobs.save(job)
+            return recommendations
+
+        added = [as_payload(rec) for rec in result.added]
+        job.finish_stage(
+            StageName.REFINE,
+            state=StageState.DONE,
+            result={
+                "added": added,
+                "rounds": result.rounds,
+                "gaps": [
+                    {"concept": g.concept, "filled": g.filled, "filled_by": list(g.filled_by)}
+                    for g in result.gaps
+                ],
+                "unmet": list(result.unmet),
+            },
+            detail=(
+                "Nothing in this wardrobe covers: " + ", ".join(result.unmet)
+                if result.unmet
+                else ""
+            ),
+        )
+        self.jobs.save(job)
+        return recommendations + added
 
     def _generate(self, job: Job, query: UserQuery, metrics: BodyMetrics, *, enabled: bool) -> None:
         job.start_stage(StageName.GENERATE)

@@ -223,11 +223,20 @@ def render_card(rec: dict[str, Any], position: int) -> None:
         ]
     )
     fixes = "".join(f'<div class="fix">{f}</div>' for f in rec.get("adjustments", []))
-    matched = ", ".join(rec.get("matched_on", []))
+    matched_list = [str(m) for m in rec.get("matched_on", [])]
+    gap = next((m.split(":", 1)[1] for m in matched_list if m.startswith("gap:")), None)
+    matched = ", ".join(matched_list)
 
+    # A gap-filled item is not the Nth best match; it was retrieved to cover something
+    # the request asked for and the first pass missed, so it says that instead.
+    header = (
+        f'<div class="rank">retrieved for &ldquo;{gap}&rdquo;</div>'
+        if gap
+        else f'<div class="rank">{rank} choice &middot; {rec["score"]:.4f}</div>'
+    )
     st.markdown(
         f'<div class="card">'
-        f'<div class="rank">{rank} choice &middot; {rec["score"]:.4f}</div>'
+        f"{header}"
         f"<h3>{rec['garment_type']}</h3>"
         f"{attributes}"
         f'<div class="why">{rec["rationale"]}</div>'
@@ -277,6 +286,32 @@ def render_results(job: Job, photo: bytes, query_text: str = "") -> None:
                 "<strong>No outfits in the corpus are worn by anyone with this body "
                 "shape</strong>, so these span other shapes. The adjustment notes "
                 "matter more than usual here.",
+                "amber",
+            ),
+            unsafe_allow_html=True,
+        )
+
+    refine = stage_result(job, StageName.REFINE)
+    unmet = refine.get("unmet") or []
+    filled = [g for g in refine.get("gaps", []) if g.get("filled")]
+    if filled:
+        covered = ", ".join(str(g["concept"]) for g in filled)
+        st.markdown(
+            theme.notice(
+                f"<strong>Searched again for {covered}.</strong> Your request mentioned "
+                "these and the first pass missed them, so extra outfits were retrieved "
+                "specifically to cover them &mdash; marked below.",
+                "teal",
+            ),
+            unsafe_allow_html=True,
+        )
+    if unmet:
+        st.markdown(
+            theme.notice(
+                "<strong>Not found in this wardrobe: "
+                + ", ".join(str(u) for u in unmet)
+                + ".</strong> Nothing in the indexed corpus matches those, so the "
+                "results below do not include them.",
                 "amber",
             ),
             unsafe_allow_html=True,

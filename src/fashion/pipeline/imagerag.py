@@ -22,10 +22,19 @@ viable here: the retrieval index already exists, and the generator is swappable.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from fashion.core.models import BodyMetrics, MissingConcept, UserQuery
+from fashion.core.crosscultural import adjustments, explain
+from fashion.core.models import (
+    BodyMetrics,
+    MissingConcept,
+    OutfitItem,
+    Recommendation,
+    UserQuery,
+)
+from fashion.pipeline.retrieve import _outfit_from_payload
 from fashion.ports.embedder import Embedder
 from fashion.ports.generation import GenerationProvider
 from fashion.ports.vectorstore import IMAGE_VECTOR, Filter, VectorStore
@@ -188,3 +197,151 @@ class ImageRagGenerator:
             parts.append(f"for a {query.occasion.value} occasion")
         parts.append(f"cut to {goal}")
         return ", ".join(parts)
+
+
+# ---------------------------------------------------------------------------------
+# Retrieval-only ImageRAG
+# ---------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class Gap:
+    """One unmet part of the request, and what was found to cover it."""
+
+    concept: str
+    retrieval_caption: str
+    filled_by: tuple[str, ...] = ()
+
+    @property
+    def filled(self) -> bool:
+        return bool(self.filled_by)
+
+
+@dataclass(frozen=True, slots=True)
+class RefinementResult:
+    added: tuple[Recommendation, ...] = ()
+    gaps: tuple[Gap, ...] = ()
+    rounds: int = 0
+    skipped_reason: str | None = None
+
+    @property
+    def unmet(self) -> tuple[str, ...]:
+        """Concepts the corpus could not supply -- worth telling the user about."""
+        return tuple(g.concept for g in self.gaps if not g.filled)
+
+
+@dataclass
+class ImageRagRefiner:
+    """ImageRAG applied to retrieval rather than generation.
+
+    The paper defines its loop against a *generated* image: generate, find what the
+    prompt asked for and the image lacks, write a dense caption per gap, retrieve
+    references, regenerate. The contribution is the middle of that -- dense per-concept
+    captions retrieve better than concept names or the raw prompt -- and it does not
+    depend on there being a generator at all.
+
+    So the same loop runs here over a result set: retrieve, ask what the request wanted
+    that the results do not show, write dense captions, retrieve again for those. It
+    needs only an LLM, CLIP and the vector store, which means it runs on a CPU-only
+    deployment where the generation loop cannot.
+
+    Gaps the corpus genuinely cannot fill are reported rather than hidden. "No outfit
+    here has a dupatta" is useful; silently returning the nearest thing is not.
+    """
+
+    vision: VisionModel
+    embedder: Embedder
+    store: VectorStore
+    max_rounds: int = 2
+    per_gap: int = 2
+
+    def refine(
+        self,
+        request: str,
+        metrics: BodyMetrics,
+        existing: Sequence[Recommendation],
+        *,
+        where: Filter | None = None,
+    ) -> RefinementResult:
+        request = request.strip()
+        if not request:
+            return RefinementResult(skipped_reason="No text request to analyse.")
+
+        seen = {rec.outfit.id for rec in existing}
+        described = [_describe(rec.outfit) for rec in existing]
+        added: list[Recommendation] = []
+        gaps: list[Gap] = []
+        rounds = 0
+
+        for _ in range(self.max_rounds):
+            try:
+                missing = self.vision.find_missing_concepts(request, tuple(described))
+            except Exception:
+                log.warning("gap analysis failed", exc_info=True)
+                return RefinementResult(
+                    added=tuple(added),
+                    gaps=tuple(gaps),
+                    rounds=rounds,
+                    skipped_reason="Gap analysis was unavailable.",
+                )
+
+            rounds += 1
+            # Re-reporting a gap already examined would loop on the same failed
+            # retrieval, so only genuinely new concepts continue the loop.
+            fresh = [m for m in missing if m.concept not in {g.concept for g in gaps}]
+            if not fresh:
+                break
+
+            for concept in fresh:
+                # The dense caption, never the bare concept name. This is the paper's
+                # measured result and the whole reason the step exists.
+                vector = self.embedder.embed_text(concept.retrieval_caption)
+                hits = self.store.search(
+                    vector, using=IMAGE_VECTOR, limit=self.per_gap + len(seen), where=where
+                )
+                filled: list[str] = []
+                for hit in hits:
+                    if hit.id in seen or len(filled) >= self.per_gap:
+                        continue
+                    item = _outfit_from_payload(hit.id, hit.payload)
+                    if item is None:
+                        continue
+                    seen.add(hit.id)
+                    filled.append(hit.id)
+                    added.append(
+                        Recommendation(
+                            outfit=item,
+                            score=round(hit.score * 0.5, 6),
+                            rationale=explain(item, metrics.shape),
+                            adjustments=adjustments(item, metrics.shape),
+                            # Named so the UI can say *why* this one appeared: it was
+                            # retrieved to cover a specific unmet part of the request.
+                            matched_on=(f"gap:{concept.concept}",),
+                        )
+                    )
+                    described.append(_describe(item))
+
+                gaps.append(
+                    Gap(
+                        concept=concept.concept,
+                        retrieval_caption=concept.retrieval_caption,
+                        filled_by=tuple(filled),
+                    )
+                )
+
+        return RefinementResult(added=tuple(added), gaps=tuple(gaps), rounds=rounds)
+
+
+def _describe(outfit: OutfitItem) -> str:
+    """A compact textual view of an outfit, for the gap-analysis prompt.
+
+    Built from structured attributes rather than the stored caption so the analysis
+    does not inherit whatever a captioning pass got wrong.
+    """
+    colours = ", ".join(outfit.colors) or "unspecified colour"
+    return (
+        f"{outfit.garment_type} ({outfit.culture.value}), "
+        f"{outfit.silhouette.value.replace('_', '-')} silhouette, "
+        f"{outfit.neckline.value.replace('_', '-')} neckline, "
+        f"{outfit.waist_emphasis.value} waist, {colours}"
+    )

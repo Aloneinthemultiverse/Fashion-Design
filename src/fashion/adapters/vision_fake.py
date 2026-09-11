@@ -108,3 +108,26 @@ class FakeVisionModel:
             "traditional interpretation of {q}",
         )
         return tuple(t.format(q=base) for t in templates[: max(1, n)])
+
+    def find_missing_concepts(
+        self, request: str, found: tuple[str, ...]
+    ) -> tuple[MissingConcept, ...]:
+        """Report a gap for any notable word in the request absent from the results.
+
+        Crude but deterministic and genuinely input-dependent, so tests exercise both
+        the gap-found and no-gap paths without a network call.
+        """
+        haystack = " ".join(found).casefold()
+        gaps: list[MissingConcept] = []
+        for word in ("dupatta", "saree", "lehenga", "anarkali", "embroidered", "pastel"):
+            if word in request.casefold() and word not in haystack:
+                gaps.append(
+                    MissingConcept(
+                        concept=word,
+                        retrieval_caption=(
+                            f"A garment prominently featuring {word}, shown full length "
+                            f"in clear studio lighting against a plain background."
+                        ),
+                    )
+                )
+        return tuple(gaps)

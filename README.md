@@ -87,6 +87,21 @@ is that the VLM writes a **dense caption per missing concept** and retrieval run
 caption — retrieving on the bare concept name or the original prompt measurably
 underperforms.
 
+The paper defines its loop against a *generated* image, which needs a GPU. But the
+contribution is the middle of that loop, and it does not depend on there being a
+generator. So it ships in two forms:
+
+- **`ImageRagRefiner` (default, CPU-only).** Retrieve, ask the LLM what the request
+  wanted that the results do not show, write a dense caption per gap, retrieve again
+  for those. Needs only an LLM, CLIP and the vector store.
+- **`ImageRagGenerator` (optional, needs Colab).** The paper's original form, with
+  IP-Adapter conditioning.
+
+Gaps the corpus cannot fill are reported rather than hidden. Asking for "a pastel
+lehenga with an embroidered dupatta" against the seed corpus fills `dupatta` with two
+extra outfits and states plainly that `lehenga`, `embroidered` and `pastel` are not in
+the wardrobe — which is more useful than silently returning the nearest thing.
+
 ## Data sourcing and licensing
 
 Outfit records carry mandatory `source` and `license` fields, recorded at ingest.
