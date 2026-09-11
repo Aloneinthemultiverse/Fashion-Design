@@ -236,3 +236,75 @@ def test_neckline_and_waist_survive_the_index_round_trip(indexed) -> None:  # ty
     top = result.recommendations[0].outfit
     assert top.neckline is Neckline.V_NECK
     assert top.waist_emphasis is WaistEmphasis.HIGH
+
+
+def _mixed_region_corpus(tmp_path):  # type: ignore[no-untyped-def]
+    """Same body shape, same garments, different celebrity regions.
+
+    Body shape is held constant so that anything the region filter changes is
+    attributable to the region filter alone.
+    """
+    embedder = FakeEmbedder()
+    store = InMemoryVectorStore()
+    items, profiles = [], {}
+    for region in ("indian", "american", "british"):
+        image = tmp_path / f"{region}.jpg"
+        image.write_bytes(f"outfit-{region}".encode())
+        items.append(
+            make_outfit(f"o-{region}", celebrity_id=f"c-{region}").model_copy(
+                update={"image_path": str(image)}
+            )
+        )
+        profiles[f"c-{region}"] = CelebrityProfile(
+            id=f"c-{region}",
+            name=f"Celeb {region}",
+            region=region,
+            shape=BodyShape.PEAR,
+            build=Build.SLIM,
+            height_band=HeightBand.AVERAGE,
+        )
+    IndexBuilder(embedder, store).build(items, profiles)
+    return embedder, store
+
+
+def test_region_restricts_the_wardrobe(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """The product premise: a Western body matched to an *Indian* wardrobe.
+
+    Without this filter the composition of the corpus decides which wardrobe a user
+    sees, which is how the premise breaks silently rather than loudly.
+    """
+    embedder, store = _mixed_region_corpus(tmp_path)
+    result = Retriever(embedder, store).retrieve(
+        metrics(BodyShape.PEAR), UserQuery(text="an outfit", region="indian")
+    )
+    assert result.recommendations
+    assert all(r.outfit.celebrity_id == "c-indian" for r in result.recommendations)
+
+
+def test_omitting_region_searches_every_wardrobe(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """The engine stays general; the product default lives at the edge."""
+    embedder, store = _mixed_region_corpus(tmp_path)
+    result = Retriever(embedder, store).retrieve(
+        metrics(BodyShape.PEAR), UserQuery(text="an outfit")
+    )
+    assert {r.outfit.celebrity_id for r in result.recommendations} == {
+        "c-indian",
+        "c-american",
+        "c-british",
+    }
+
+
+def test_region_survives_the_body_shape_relaxation(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Relaxing the shape filter must not quietly widen the wardrobe as well.
+
+    Showing a cross-shape Indian outfit is a labelled compromise; showing an American
+    one to a user who asked for Indian is a different product.
+    """
+    embedder, store = _mixed_region_corpus(tmp_path)
+    result = Retriever(embedder, store).retrieve(
+        metrics(BodyShape.HOURGLASS),  # no hourglass wearers exist in this corpus
+        UserQuery(text="an outfit", region="indian"),
+    )
+    assert result.relaxed
+    assert result.recommendations
+    assert all(r.outfit.celebrity_id == "c-indian" for r in result.recommendations)

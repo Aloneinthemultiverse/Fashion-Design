@@ -146,6 +146,11 @@ class UserQuery(Frozen):
     occasion: Occasion | None = None
     culture: Culture | None = None
     celebrity_name: str | None = None
+    # Which celebrities' wardrobes to draw from. The product premise is a Western body
+    # matched to an *Indian* wardrobe, so callers normally pass "indian"; None means
+    # any region. Kept optional rather than defaulted here so the retrieval engine
+    # stays general and the product decision lives at the edge, where it is visible.
+    region: str | None = None
     style_tags: tuple[str, ...] = ()
     top_k: int = Field(default=10, ge=1, le=100)
 

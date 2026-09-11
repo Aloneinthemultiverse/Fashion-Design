@@ -53,6 +53,19 @@ classification lives there rather than in the VLM prompt: the VLM is good at *me
 proportions and inconsistent at *naming* the resulting shape, so the naming step is kept
 deterministic, testable and identical for every user.
 
+### Wardrobe region
+
+The product premise is a **Western body matched to an Indian wardrobe**, so
+`region` is a hard filter alongside body shape, and the API and UI default it to
+`indian`. It is deliberately *not* defaulted inside `UserQuery`: the retrieval
+engine stays general and the product decision lives at the edge where it is
+visible.
+
+An unstocked region returns nothing rather than substituting a different
+country's wardrobe, and region survives the body-shape relaxation — showing a
+cross-shape Indian outfit is a labelled compromise, whereas showing an American
+one to someone who asked for Indian is a different product.
+
 ### Retrieval
 
 One collection, two named vectors per outfit, plus a structured payload:

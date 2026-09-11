@@ -201,6 +201,9 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         culture: Annotated[str | None, Form()] = None,
         occasion: Annotated[str | None, Form()] = None,
         celebrity_name: Annotated[str | None, Form()] = None,
+        # Defaults to Indian: that is the product premise, and leaving it unset would
+        # let corpus composition decide which wardrobe a user is shown.
+        region: Annotated[str, Form()] = "indian",
         confirmed_shape: Annotated[str | None, Form()] = None,
         top_k: Annotated[int, Form()] = 10,
         want_generation: Annotated[bool, Form()] = True,
@@ -233,6 +236,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
                 culture=Culture(culture) if culture else None,
                 occasion=Occasion(occasion) if occasion else None,
                 celebrity_name=celebrity_name or None,
+                region=None if region in ("", "any") else region,
                 top_k=max(1, min(top_k, 50)),
             )
             shape = BodyShape(confirmed_shape) if confirmed_shape else None

@@ -71,6 +71,11 @@ class Retriever:
         must: dict[str, str] = {}
         if strict:
             must["body_shape"] = metrics.shape.value
+        if query.region:
+            # Region is a constraint, not a preference. Without it the corpus order
+            # decides which wardrobe a user is shown, which silently breaks the
+            # cross-cultural premise as soon as non-Indian celebrities are ingested.
+            must["region"] = query.region
         if query.culture is not None:
             must["culture"] = query.culture.value
         if query.occasion is not None:

@@ -244,7 +244,11 @@ def render_results(job: Job, photo: bytes, query_text: str = "") -> None:
     recommendations = retrieve.get("recommendations", [])
     if not recommendations:
         st.markdown(
-            theme.notice("Nothing matched. Try widening the style or occasion filters."),
+            theme.notice(
+                "<strong>Nothing matched.</strong> Most often this means the corpus "
+                "holds no outfits from that wardrobe yet. Try setting Wardrobe to "
+                "<code>any</code>, or widening the style and occasion filters."
+            ),
             unsafe_allow_html=True,
         )
         return
@@ -329,8 +333,9 @@ def main() -> None:
         culture = a.selectbox("Style", ["any", *[c.value for c in Culture]])
         occasion = b.selectbox("Occasion", ["any", *[o.value for o in Occasion]])
         c, d = st.columns(2)
-        celebrity = c.text_input("A specific celebrity (optional)")
-        top_k = d.slider("How many", 3, 12, 6)
+        region = c.selectbox("Wardrobe", ["indian", "american", "british", "any"])
+        celebrity = d.text_input("A specific celebrity (optional)")
+        top_k = st.slider("How many", 3, 12, 6)
         st.markdown("<div style='height:0.6rem'></div>", unsafe_allow_html=True)
         go = st.button("Find my outfits")
 
@@ -362,6 +367,7 @@ def main() -> None:
         culture=Culture(culture) if culture != "any" else None,
         occasion=Occasion(occasion) if occasion != "any" else None,
         celebrity_name=celebrity or None,
+        region=None if region == "any" else region,
         top_k=top_k,
     )
     # A shape the user corrected survives reruns, so confirming once is enough.

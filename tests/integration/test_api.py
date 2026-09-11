@@ -220,3 +220,31 @@ def test_top_k_is_clamped_rather_than_rejected(client: TestClient) -> None:
     job_id = submit(client, top_k="9999")["job_id"]
     stages = {s["name"]: s for s in client.get(f"/recommendations/{job_id}").json()["stages"]}
     assert len(stages["retrieve"]["result"]["recommendations"]) <= 50
+
+
+def test_api_defaults_to_the_indian_wardrobe(client: TestClient) -> None:
+    """The product premise is a default, not an assumption about corpus order.
+
+    The seed fixture is all-Indian, so this asserts the parameter is accepted and
+    applied rather than that it excludes anything here; test_region_restricts_the_
+    wardrobe covers the exclusion against a mixed corpus.
+    """
+    job_id = submit(client)["job_id"]
+    stages = {s["name"]: s for s in client.get(f"/recommendations/{job_id}").json()["stages"]}
+    assert stages["retrieve"]["state"] == "done"
+    assert stages["retrieve"]["result"]["recommendations"]
+
+
+def test_region_any_is_accepted(client: TestClient) -> None:
+    job_id = submit(client, region="any")["job_id"]
+    stages = {s["name"]: s for s in client.get(f"/recommendations/{job_id}").json()["stages"]}
+    assert stages["retrieve"]["result"]["recommendations"]
+
+
+def test_an_unstocked_region_returns_nothing_rather_than_the_wrong_wardrobe(
+    client: TestClient,
+) -> None:
+    """Silently substituting a different country's wardrobe would be worse than empty."""
+    job_id = submit(client, region="american")["job_id"]
+    stages = {s["name"]: s for s in client.get(f"/recommendations/{job_id}").json()["stages"]}
+    assert stages["retrieve"]["result"]["recommendations"] == []
