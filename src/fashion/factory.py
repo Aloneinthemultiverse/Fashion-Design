@@ -78,6 +78,12 @@ def build_store(settings: Settings | None = None) -> VectorStore:
 
 def build_generation(settings: Settings | None = None) -> GenerationProvider:
     settings = settings or load_settings()
+    if settings.generation_provider == "hosted":
+        # Default: free, keyless, and works without a GPU. Cannot be conditioned on
+        # reference images, which the ImageRAG loop checks for and reports.
+        from fashion.adapters.gen_pollinations import PollinationsGenerationProvider
+
+        return PollinationsGenerationProvider()
     if settings.generation_provider == "colab" and settings.colab_worker_url:
         from fashion.adapters.colab_worker import ColabGenerationProvider
 

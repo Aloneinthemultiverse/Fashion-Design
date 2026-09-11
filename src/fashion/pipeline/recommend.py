@@ -75,6 +75,10 @@ class RecommendationPipeline:
     # Carried between the retrieve and refine stages so refinement works on the objects
     # rather than re-parsing its own output.
     _last_recommendations: tuple[Recommendation, ...] = field(default=(), init=False, repr=False)
+    # Where generated images land. Written to disk rather than carried inside the job,
+    # because job state is serialised to Redis and megabytes of base64 per job would
+    # make this a poor tenant there.
+    output_dir: Path = field(default_factory=lambda: Path("data/generated"))
 
     def run(
         self,
@@ -322,11 +326,15 @@ class RecommendationPipeline:
             self.jobs.save(job)
             return
 
+        image_path = self._save_generated(job.id, result.image)
         job.finish_stage(
             StageName.GENERATE,
             state=StageState.DONE if result.image else StageState.SKIPPED,
             result={
                 "has_image": result.image is not None,
+                "image_path": image_path,
+                "prompt": ImageRagGenerator._build_prompt(query, metrics),
+                "reference_guided": self.generator.supports_references,
                 "converged": result.converged,
                 "rounds": len(result.rounds),
                 "references": list(result.references),
@@ -335,6 +343,20 @@ class RecommendationPipeline:
             detail=result.unavailable_reason or "",
         )
         self.jobs.save(job)
+
+    def _save_generated(self, job_id: str, image: bytes | None) -> str | None:
+        if image is None:
+            return None
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            path = self.output_dir / f"{job_id}.png"
+            path.write_bytes(image)
+        except OSError:
+            # A generated preview that cannot be written is a lost nicety, not a
+            # reason to fail a job whose recommendations already succeeded.
+            log.warning("could not save the generated image", exc_info=True)
+            return None
+        return str(path)
 
     def _tryon(
         self,

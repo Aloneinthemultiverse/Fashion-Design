@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     qdrant_api_key: str = ""
     qdrant_collection: str = "outfits"
 
-    generation_provider: Literal["null", "colab"] = "null"
+    generation_provider: Literal["null", "hosted", "colab"] = "hosted"
     tryon_provider: Literal["null", "colab"] = "null"
     colab_worker_url: str = ""
 

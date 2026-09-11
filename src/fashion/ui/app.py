@@ -327,6 +327,27 @@ def render_results(job: Job, photo: bytes, query_text: str = "") -> None:
                 render_card(rec, start + offset)
                 render_feedback(rec, analyze, query_text)
 
+    generate = stage_result(job, StageName.GENERATE)
+    generated_path = Path(str(generate.get("image_path") or ""))
+    if generate.get("has_image") and generated_path.exists():
+        st.markdown(theme.sect("Generated concept"), unsafe_allow_html=True)
+        if not generate.get("reference_guided", False):
+            st.markdown(
+                theme.notice(
+                    "<strong>Text-prompted, not reference-guided.</strong> This backend "
+                    "cannot be conditioned on the retrieved outfits, so the image "
+                    "follows the written brief rather than any specific garment above. "
+                    "Run the Colab worker for true ImageRAG reference conditioning."
+                ),
+                unsafe_allow_html=True,
+            )
+        a, b = st.columns([1, 1])
+        a.image(str(generated_path), caption="Generated concept", use_container_width=True)
+        b.markdown(
+            theme.notice(f"<strong>Prompt</strong><br>{generate.get('prompt', '')}"),
+            unsafe_allow_html=True,
+        )
+
     tryon_stage = job.stage(StageName.TRYON)
     if tryon_stage.detail:
         st.markdown(theme.sect("Try-on"), unsafe_allow_html=True)
