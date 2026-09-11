@@ -13,11 +13,12 @@ there is no useful answer without them.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from fashion.core.jobs import Job, JobStore, StageName, StageState
-from fashion.core.models import BodyMetrics, BodyShape, UserQuery
+from fashion.core.models import BodyMetrics, BodyShape, CelebrityProfile, UserQuery
+from fashion.core.reference import BodyReferenceResolver
 from fashion.pipeline.imagerag import ImageRagGenerator
 from fashion.pipeline.retrieve import Retriever
 from fashion.ports.embedder import Embedder
@@ -37,6 +38,9 @@ class RecommendationPipeline:
     generator: GenerationProvider
     tryon: TryOnProvider
     jobs: JobStore
+    # Profiles for resolving a named body reference. Empty means the feature is simply
+    # unavailable, which the stage reports rather than failing over.
+    profiles: dict[str, CelebrityProfile] = field(default_factory=dict)
 
     def run(
         self,
@@ -45,14 +49,15 @@ class RecommendationPipeline:
         query: UserQuery,
         *,
         confirmed_shape: BodyShape | None = None,
+        reference_image: bytes | None = None,
         want_generation: bool = True,
         want_tryon: bool = True,
     ) -> Job:
-        metrics = self._analyze(job, photo, confirmed_shape)
+        metrics = self._analyze(job, photo, confirmed_shape, query.body_reference)
         if metrics is None:
             return job
 
-        recommendations = self._retrieve(job, metrics, query, photo)
+        recommendations = self._retrieve(job, metrics, query, photo, reference_image)
         if recommendations is None:
             return job
 
@@ -66,10 +71,55 @@ class RecommendationPipeline:
     # -- stages -------------------------------------------------------------------
 
     def _analyze(
-        self, job: Job, photo: bytes, confirmed_shape: BodyShape | None
+        self,
+        job: Job,
+        photo: bytes,
+        confirmed_shape: BodyShape | None,
+        body_reference: str | None = None,
     ) -> BodyMetrics | None:
         job.start_stage(StageName.ANALYZE)
         self.jobs.save(job)
+
+        # A named body reference short-circuits photo analysis entirely: the user has
+        # stated whose proportions to use, so inferring different ones from a picture
+        # and then blending them would only add noise.
+        if body_reference:
+            resolver = BodyReferenceResolver(self.profiles)
+            match = resolver.resolve(body_reference)
+            if match is not None:
+                metrics = match.to_metrics()
+                job.finish_stage(
+                    StageName.ANALYZE,
+                    result={
+                        "shape": metrics.shape.value,
+                        "build": metrics.build.value,
+                        "height_band": metrics.height_band.value,
+                        "confidence": 1.0,
+                        "user_confirmed": True,
+                        "needs_confirmation": False,
+                        "body_reference": match.profile.name,
+                        "body_reference_exact": match.exact,
+                        "shoulder_waist_ratio": None,
+                        "waist_hip_ratio": None,
+                    },
+                    detail=f"Matched to {match.profile.name}'s proportions.",
+                )
+                self.jobs.save(job)
+                return metrics
+
+            suggestions = resolver.suggest(body_reference)
+            job.finish_stage(
+                StageName.ANALYZE,
+                state=StageState.FAILED,
+                detail=(
+                    f"No celebrity named {body_reference!r} is in the profile set."
+                    + (f" Did you mean: {', '.join(suggestions)}?" if suggestions else "")
+                ),
+            )
+            job.fail(f"Unknown body reference {body_reference!r}.")
+            self.jobs.save(job)
+            return None
+
         try:
             metrics = self.vision.analyze_body(photo)
         except Exception as exc:
@@ -105,12 +155,19 @@ class RecommendationPipeline:
         return metrics
 
     def _retrieve(
-        self, job: Job, metrics: BodyMetrics, query: UserQuery, photo: bytes
+        self,
+        job: Job,
+        metrics: BodyMetrics,
+        query: UserQuery,
+        photo: bytes,
+        reference_image: bytes | None = None,
     ) -> list[dict[str, object]] | None:
         job.start_stage(StageName.RETRIEVE)
         self.jobs.save(job)
         try:
-            result = Retriever(self.embedder, self.store).retrieve(metrics, query, photo=photo)
+            result = Retriever(self.embedder, self.store, vision=self.vision).retrieve(
+                metrics, query, photo=photo, reference_image=reference_image
+            )
         except Exception as exc:
             log.warning("retrieval failed", exc_info=True)
             job.finish_stage(StageName.RETRIEVE, state=StageState.FAILED, detail=str(exc)[:200])

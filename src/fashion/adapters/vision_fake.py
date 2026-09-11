@@ -91,3 +91,20 @@ class FakeVisionModel:
             f"The {outfit.garment_type} suits a {metrics.shape.value} frame "
             f"because its {outfit.silhouette.value} cut balances your proportions."
         )
+
+    def expand_query(self, text: str, n: int = 3) -> tuple[str, ...]:
+        """Deterministic rephrasings.
+
+        The original always comes first so a caller that takes only the head still gets
+        the user's actual words.
+        """
+        base = text.strip()
+        if not base:
+            return ()
+        templates = (
+            "{q}",
+            "an outfit in the style of {q}",
+            "{q}, flattering silhouette and neckline",
+            "traditional interpretation of {q}",
+        )
+        return tuple(t.format(q=base) for t in templates[: max(1, n)])

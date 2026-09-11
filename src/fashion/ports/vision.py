@@ -39,3 +39,14 @@ class VisionModel(Protocol):
     def write_rationale(self, outfit: OutfitItem, metrics: BodyMetrics) -> str:
         """Explain why this outfit suits this body."""
         ...
+
+    def expand_query(self, text: str, n: int = 3) -> tuple[str, ...]:
+        """Rewrite one request as several differently-phrased searches.
+
+        This is the generation half of RAG-Fusion (Raudaschl, 2023): one query is
+        expanded into several, each is retrieved for, and the ranked lists are fused.
+        Without it, fusing retrieval channels alone is hybrid search -- the expansion
+        is what makes it RAG-Fusion, and it is what surfaces items the user's original
+        wording would have missed.
+        """
+        ...

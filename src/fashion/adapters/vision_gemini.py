@@ -241,3 +241,36 @@ class GeminiVisionModel:
         )
         result = self._call("write_rationale", prompt, None, None)
         return str(result.get("text", "")).strip() or grounded
+
+    def expand_query(self, text: str, n: int = 3) -> tuple[str, ...]:
+        """Generate query variations for RAG-Fusion.
+
+        Cached like every other call, so repeating a popular search costs no quota. The
+        original query is always returned first: the expansions are there to widen
+        recall, not to replace what the user actually asked for.
+        """
+        query = text.strip()
+        if not query:
+            return ()
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "queries": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["queries"],
+        }
+        prompt = (
+            f"Rewrite this outfit search as {n} differently-phrased searches that would "
+            f"retrieve overlapping but not identical results. Vary the vocabulary, the "
+            f"level of detail, and whether garment names are specific or general. Keep "
+            f"every rewrite faithful to the original intent.{chr(10)}{chr(10)}"
+            f"Search: {query}"
+        )
+        data = self._call("expand_query", prompt, None, schema)
+        variants = [
+            str(q).strip()
+            for q in (data.get("queries") or [])
+            if str(q).strip() and str(q).strip().casefold() != query.casefold()
+        ]
+        return (query, *variants[:n])

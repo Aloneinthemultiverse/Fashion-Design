@@ -61,6 +61,7 @@ class StubDeps(Deps):
         self.quota = DailyQuota(1000)
         self.results = TtlCache(max_entries=64)
         self.feedback = FeedbackLog(tmp_path / "feedback.jsonl")
+        self.profiles: dict[str, CelebrityProfile] = {}
 
         items = []
         profiles = {}
@@ -81,6 +82,7 @@ class StubDeps(Deps):
                 height_band=HeightBand.AVERAGE,
             )
         IndexBuilder(self.embedder, self.store).build(items, profiles)
+        self.profiles = profiles
 
 
 @pytest.fixture

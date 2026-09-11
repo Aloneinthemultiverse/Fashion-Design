@@ -151,11 +151,17 @@ class UserQuery(Frozen):
     # any region. Kept optional rather than defaulted here so the retrieval engine
     # stays general and the product decision lives at the edge, where it is visible.
     region: str | None = None
+    # A Western celebrity whose proportions stand in for the user's own -- the problem
+    # statement's primary input. Distinct from `celebrity_name`, which narrows whose
+    # wardrobe is searched; this one says whose *body* to match.
+    body_reference: str | None = None
     style_tags: tuple[str, ...] = ()
     top_k: int = Field(default=10, ge=1, le=100)
 
     @property
     def mode(self) -> str:
+        if self.body_reference:
+            return "body_reference"
         return "celebrity" if self.celebrity_name else "body_match"
 
 

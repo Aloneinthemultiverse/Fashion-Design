@@ -199,6 +199,15 @@ def render_feedback(rec: dict[str, Any], analyze: dict[str, Any], query_text: st
 
 
 @st.cache_resource
+def celebrity_profiles() -> dict[str, Any]:
+    """Profiles used to resolve a named body reference."""
+    from fashion.core.dataset import CelebrityRepository
+
+    settings = load_settings()
+    return CelebrityRepository(settings.data_dir / "celebrity_profiles.jsonl").index()
+
+
+@st.cache_resource
 def feedback_log() -> FeedbackLog:
     return FeedbackLog(load_settings().data_dir / "feedback.jsonl")
 
@@ -326,6 +335,12 @@ def main() -> None:
         )
         if upload:
             st.image(upload, use_container_width=True)
+        reference_upload = st.file_uploader(
+            "Or an outfit you like — finds similar ones",
+            type=["jpg", "jpeg", "png", "webp"],
+        )
+        if reference_upload:
+            st.image(reference_upload, use_container_width=True)
 
     with form_col:
         text = st.text_input("What you are looking for", value="festive ethnic wear")
@@ -333,11 +348,19 @@ def main() -> None:
         culture = a.selectbox("Style", ["any", *[c.value for c in Culture]])
         occasion = b.selectbox("Occasion", ["any", *[o.value for o in Occasion]])
         c, d = st.columns(2)
-        region = c.selectbox("Wardrobe", ["indian", "american", "british", "any"])
-        celebrity = d.text_input("A specific celebrity (optional)")
-        top_k = st.slider("How many", 3, 12, 6)
+        # These two were one confusingly-labelled field. They are opposite ends of the
+        # cross-cultural match: whose body you share, and whose wardrobe you want.
+        body_reference = c.text_input("Build like… (optional)", placeholder="e.g. Zendaya")
+        celebrity = d.text_input(
+            "Only this celebrity's wardrobe (optional)", placeholder="e.g. Deepika Padukone"
+        )
+        e, f = st.columns(2)
+        region = e.selectbox("Wardrobe", ["indian", "american", "british", "any"])
+        top_k = f.slider("How many", 3, 12, 6)
         st.markdown("<div style='height:0.6rem'></div>", unsafe_allow_html=True)
         go = st.button("Find my outfits")
+
+    reference_bytes = reference_upload.getvalue() if reference_upload else None
 
     if not go:
         # Streamlit reruns the whole script on every interaction, including a feedback
@@ -349,7 +372,13 @@ def main() -> None:
         return
 
     if upload is None:
-        st.markdown(theme.notice("Upload a photo first.", "amber"), unsafe_allow_html=True)
+        st.markdown(
+            theme.notice(
+                "Upload a photo of yourself, or name someone whose build you share.",
+                "amber",
+            ),
+            unsafe_allow_html=True,
+        )
         return
 
     photo = upload.getvalue()
@@ -361,6 +390,7 @@ def main() -> None:
         generator=generator,
         tryon=tryon,
         jobs=jobs,
+        profiles=celebrity_profiles(),
     )
     query = UserQuery(
         text=text,
@@ -368,6 +398,7 @@ def main() -> None:
         occasion=Occasion(occasion) if occasion != "any" else None,
         celebrity_name=celebrity or None,
         region=None if region == "any" else region,
+        body_reference=body_reference or None,
         top_k=top_k,
     )
     # A shape the user corrected survives reruns, so confirming once is enough.
@@ -381,6 +412,7 @@ def main() -> None:
             photo,
             query,
             confirmed_shape=BodyShape(confirmed) if confirmed else None,
+            reference_image=reference_bytes,
         )
 
     # Kept so feedback clicks (and any other rerun) can redraw the same results.

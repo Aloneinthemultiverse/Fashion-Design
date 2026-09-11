@@ -97,6 +97,12 @@ class Deps:
         # The in-memory store is process-local and starts empty; without this the API
         # serves an empty corpus and every request returns no recommendations.
         load_corpus(self.embedder, self.store, self.settings)
+        # Needed to resolve a named body reference to recorded proportions.
+        from fashion.core.dataset import CelebrityRepository
+
+        self.profiles = CelebrityRepository(
+            self.settings.data_dir / "celebrity_profiles.jsonl"
+        ).index()
 
     def pipeline(self) -> RecommendationPipeline:
         return RecommendationPipeline(
@@ -106,6 +112,7 @@ class Deps:
             generator=self.generator,
             tryon=self.tryon,
             jobs=self.jobs,
+            profiles=self.profiles,
         )
 
 
@@ -204,6 +211,9 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         # Defaults to Indian: that is the product premise, and leaving it unset would
         # let corpus composition decide which wardrobe a user is shown.
         region: Annotated[str, Form()] = "indian",
+        # Whose *body* to match, as opposed to whose wardrobe to search.
+        body_reference: Annotated[str | None, Form()] = None,
+        reference_outfit: Annotated[UploadFile | None, File()] = None,
         confirmed_shape: Annotated[str | None, Form()] = None,
         top_k: Annotated[int, Form()] = 10,
         want_generation: Annotated[bool, Form()] = True,
@@ -237,6 +247,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
                 occasion=Occasion(occasion) if occasion else None,
                 celebrity_name=celebrity_name or None,
                 region=None if region in ("", "any") else region,
+                body_reference=body_reference or None,
                 top_k=max(1, min(top_k, 50)),
             )
             shape = BodyShape(confirmed_shape) if confirmed_shape else None
@@ -272,7 +283,18 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
         # FastAPI's BackgroundTasks runs after the response is sent, so the client gets
         # its job id immediately rather than waiting on the pipeline.
-        background.add_task(_run_job, d, job, data, query, shape, want_generation, want_tryon)
+        reference_bytes = await reference_outfit.read() if reference_outfit else None
+        background.add_task(
+            _run_job,
+            d,
+            job,
+            data,
+            query,
+            shape,
+            reference_bytes,
+            want_generation,
+            want_tryon,
+        )
 
         return SubmitResponse(
             job_id=job.id, state=job.state.value, poll_url=f"/recommendations/{job.id}"
@@ -305,6 +327,7 @@ def _run_job(
     photo: bytes,
     query: UserQuery,
     shape: BodyShape | None,
+    reference_image: bytes | None,
     want_generation: bool,
     want_tryon: bool,
 ) -> None:
@@ -314,6 +337,7 @@ def _run_job(
             photo,
             query,
             confirmed_shape=shape,
+            reference_image=reference_image,
             want_generation=want_generation,
             want_tryon=want_tryon,
         )
