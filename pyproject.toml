@@ -70,7 +70,7 @@ mypy_path = "src"
 packages = ["fashion"]
 
 [[tool.mypy.overrides]]
-module = ["open_clip.*", "qdrant_client.*", "rq.*", "streamlit.*", "google.*", "instaloader.*", "torch.*", "PIL.*"]
+module = ["open_clip.*", "qdrant_client.*", "rq.*", "streamlit.*", "google.*", "instaloader.*", "torch.*", "PIL.*", "redis.*", "fastapi.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

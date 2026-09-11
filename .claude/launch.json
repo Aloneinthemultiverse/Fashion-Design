@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "streamlit",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "streamlit", "run", "src/fashion/ui/app.py", "--server.port", "8501", "--server.headless", "true"],
+      "port": 8501
+    },
+    {
+      "name": "api",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "uvicorn", "fashion.api.app:app", "--port", "8000"],
+      "port": 8000
+    }
+  ]
+}
