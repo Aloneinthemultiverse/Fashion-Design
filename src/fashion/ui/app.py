@@ -19,6 +19,7 @@ import streamlit as st
 
 from fashion.adapters.jobs_store import InMemoryJobStore
 from fashion.config import load_settings
+from fashion.core.feedback import FeedbackEvent, FeedbackLog, Verdict
 from fashion.core.jobs import Job, StageName
 from fashion.core.models import BodyShape, Culture, Occasion, UserQuery
 from fashion.factory import (
@@ -158,6 +159,50 @@ def render_body_reading(analyze: dict[str, Any]) -> None:
             st.rerun()
 
 
+def render_feedback(rec: dict[str, Any], analyze: dict[str, Any], query_text: str) -> None:
+    """Thumbs up/down for one recommendation.
+
+    Records whether the body shape was user-confirmed alongside the verdict. Without
+    that flag a thumbs-down is uninterpretable: it could mean the outfit was wrong, or
+    that the shape it was chosen for was wrong, and those need different fixes.
+    """
+    log = feedback_log()
+    outfit_id = str(rec["outfit_id"])
+    given = st.session_state.setdefault("feedback_given", {})
+
+    if outfit_id in given:
+        st.markdown(
+            f'<div class="voted">Noted &mdash; {given[outfit_id]}</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    up_col, down_col = st.columns(2)
+    for column, verdict, label in (
+        (up_col, Verdict.UP, "Works"),
+        (down_col, Verdict.DOWN, "Not for me"),
+    ):
+        with column, st.container():
+            if st.button(label, key=f"fb-{verdict.value}-{outfit_id}"):
+                log.record(
+                    FeedbackEvent(
+                        outfit_id=outfit_id,
+                        verdict=verdict,
+                        body_shape=str(analyze["shape"]),
+                        shape_was_confirmed=bool(analyze.get("user_confirmed")),
+                        query_text=query_text,
+                        matched_on=tuple(rec.get("matched_on", ())),
+                    )
+                )
+                given[outfit_id] = label.lower()
+                st.rerun()
+
+
+@st.cache_resource
+def feedback_log() -> FeedbackLog:
+    return FeedbackLog(load_settings().data_dir / "feedback.jsonl")
+
+
 def render_card(rec: dict[str, Any], position: int) -> None:
     rank = ORDINALS[position] if position < len(ORDINALS) else f"#{position + 1}"
     attributes = theme.chips(
@@ -184,7 +229,7 @@ def render_card(rec: dict[str, Any], position: int) -> None:
     )
 
 
-def render_results(job: Job, photo: bytes) -> None:
+def render_results(job: Job, photo: bytes, query_text: str = "") -> None:
     analyze = stage_result(job, StageName.ANALYZE)
     if not analyze:
         st.markdown(
@@ -232,6 +277,7 @@ def render_results(job: Job, photo: bytes) -> None:
                 if path.exists():
                     st.image(str(path), use_container_width=True)
                 render_card(rec, start + offset)
+                render_feedback(rec, analyze, query_text)
 
     tryon_stage = job.stage(StageName.TRYON)
     if tryon_stage.detail:
@@ -289,7 +335,14 @@ def main() -> None:
         go = st.button("Find my outfits")
 
     if not go:
+        # Streamlit reruns the whole script on every interaction, including a feedback
+        # click. Without re-rendering the stored run, voting on a card would make the
+        # entire results section vanish.
+        stored = st.session_state.get("last_run")
+        if stored:
+            render_results(stored["job"], stored["photo"], query_text=stored["query_text"])
         return
+
     if upload is None:
         st.markdown(theme.notice("Upload a photo first.", "amber"), unsafe_allow_html=True)
         return
@@ -324,7 +377,9 @@ def main() -> None:
             confirmed_shape=BodyShape(confirmed) if confirmed else None,
         )
 
-    render_results(job, photo)
+    # Kept so feedback clicks (and any other rerun) can redraw the same results.
+    st.session_state["last_run"] = {"job": job, "photo": photo, "query_text": text}
+    render_results(job, photo, query_text=text)
 
 
 if __name__ == "__main__":

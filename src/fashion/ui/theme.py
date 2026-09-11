@@ -179,6 +179,13 @@ img { border-radius: 10px; }
     background: rgba(188,140,255,0.08);
 }
 
+.voted {
+    font-size: 0.74rem; letter-spacing: 0.04em; color: var(--teal);
+    background: rgba(57,210,192,0.07); border: 1px solid rgba(57,210,192,0.22);
+    border-radius: 8px; padding: 0.45rem 0.7rem; text-align: center;
+    margin-top: 0.45rem;
+}
+
 /* ---- Notices ----------------------------------------------------------- */
 
 .notice {
