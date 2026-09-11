@@ -14,6 +14,21 @@ uv sync --extra dev
 uv run pytest
 ```
 
+Run the app:
+
+```bash
+uv sync --extra dev --extra sources --extra store --extra api --extra ui
+uv run python scripts/fetch_roster.py --indian 1000 --american 600 --british 400
+uv run python scripts/ingest.py --limit 40 --vision fake
+uv run streamlit run src/fashion/ui/app.py
+```
+
+Or the API:
+
+```bash
+uv run uvicorn fashion.api.app:app --port 8000
+```
+
 The full test suite runs with **no API key, no Docker and no network** — the default
 providers are a deterministic fake VLM, a fake embedder and an in-memory vector store.
 Real providers are opt-in via `.env` (copy `.env.example`).
@@ -76,36 +91,69 @@ Two `ImageSource` adapters ship:
 
 ## Status
 
+All phases implemented.
+
 | Phase | State |
 |---|---|
 | P0 — foundation: ports, domain logic, fakes, CI | done |
 | P1 — image sources, 1,995-celebrity roster, resumable ingest | done |
-| P2 — dual-vector index + hybrid retrieval (+ Qdrant) | done |
-| P3 — ImageRAG generation loop | done |
-| P2 tail — async API, worker, Streamlit UI | next |
-| P4 — virtual try-on | pending |
-| P5 — production hardening | pending |
+| P2 — dual-vector index, hybrid retrieval, Qdrant | done |
+| P2 tail — async API, RQ worker, Streamlit UI | done |
+| P3 — ImageRAG loop + Colab GPU worker | done |
+| P4 — virtual try-on stage | done |
+| P5 — rate limiting, caching, feedback, metrics | done |
 
-132 tests, ruff and mypy --strict clean.
+**183 tests**, ruff and mypy --strict clean.
 
-### What is real today
+## API
 
-`data/seed/celebrities.jsonl` holds 1,995 real celebrities (1,000 Indian, 598
-American, 397 British) fetched from Wikidata, each with a Commons-hosted image.
-32 of them are labelled end-to-end and indexed, and retrieval returns ranked,
-explained recommendations over that corpus.
+```
+POST /recommendations      -> 202 { job_id, poll_url }
+GET  /recommendations/{id} -> stage-by-stage progress and partial results
+POST /feedback             -> 204
+GET  /health               -> which backends are live
+GET  /metrics              -> cache hit rate, quota burn, satisfaction
+```
 
-### What still needs you
+Submit-and-poll rather than a single synchronous call: the pipeline takes 45–90
+seconds and no production HTTP request survives that (ADR 0002). Stages publish
+results as they land, so body analysis appears at ~2s and recommendations at
+~10s.
 
-1. **A Gemini API key.** The 32 labelled items were produced by the *fake* VLM, so
-   their garment tags are meaningless. Get a free key at
-   [aistudio.google.com/apikey](https://aistudio.google.com/apikey), put it in `.env`,
-   then re-run ingest against a clean `labels.jsonl` for real labels.
-2. **Time, for the full corpus.** ~1,400 images/day fits the free tier, so labelling
-   all 1,995 takes about two days of wall-clock. Ingest is resumable, so run it in
-   chunks.
-3. **A decision on Instagram.** The adapter is written and tested but never runs by
-   default — see `docs/adr/0003`.
-4. **A decision on generation.** Everything through ImageRAG works against the null
-   provider; producing actual images needs the Colab worker (P3 hardware, not yet
-   written).
+`SKIPPED` and `FAILED` are distinct stage states. A missing GPU is a
+configuration choice the UI explains; a crash is not. Collapsing them would make
+an outage look deliberate.
+
+## What is real today
+
+`data/seed/celebrities.jsonl` holds **1,995 real celebrities** (1,000 Indian, 598
+American, 397 British) from Wikidata, each with a Commons-hosted image and a
+recorded licence. 32 are labelled and indexed end-to-end; retrieval, the API and
+the UI all run against them.
+
+## What still needs you
+
+1. **A Gemini API key.** The 32 labelled items came from the *fake* VLM, so their
+   garment tags are meaningless — it labelled a man in a tuxedo as wearing a
+   saree. Get a free key at
+   [aistudio.google.com/apikey](https://aistudio.google.com/apikey), set
+   `FASHION_VISION_PROVIDER=gemini`, delete `data/seed/labels.jsonl`, and re-run
+   ingest. The UI shows a prominent warning until you do.
+2. **Time, for the full corpus.** ~1,200 images/day fits inside the budget, so
+   labelling all 1,995 takes about two days. Ingest is resumable.
+3. **A Colab session,** if you want generated previews or try-on. Run
+   `colab/worker.ipynb` and paste the printed URL into `.env`. Everything works
+   without it — you just get real photographed outfits instead.
+4. **A decision on Instagram.** The adapter is written and tested but never runs
+   by default. See `docs/adr/0003`.
+
+## Known limits
+
+- Rate limiters and the result cache are in-process: correct for one node, wrong
+  for several, where the effective limit would multiply per node.
+- Single-photo body inference is the weakest link in the system. It is treated as
+  a prior the user can correct, not a verdict, and `/metrics` reports
+  satisfaction separately for confirmed readings so the two failure modes stay
+  distinguishable.
+- The try-on path uses SDXL inpainting with IP-Adapter conditioning rather than
+  IDM-VTON proper, whose weights and repo layout are unstable.
