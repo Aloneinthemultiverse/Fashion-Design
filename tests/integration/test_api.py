@@ -18,18 +18,24 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-from fastapi.testclient import TestClient  # noqa: E402
+from fastapi.testclient import TestClient
 
-from fashion.adapters.embed_fake import FakeEmbedder  # noqa: E402
-from fashion.adapters.gen_null import NullGenerationProvider, NullTryOnProvider  # noqa: E402
-from fashion.adapters.jobs_store import InMemoryJobStore  # noqa: E402
-from fashion.adapters.store_memory import InMemoryVectorStore  # noqa: E402
-from fashion.adapters.vision_fake import FakeVisionModel  # noqa: E402
-from fashion.api.app import Deps, create_app  # noqa: E402
-from fashion.config import Settings  # noqa: E402
-from fashion.core.models import BodyShape, Build, CelebrityProfile, HeightBand  # noqa: E402
-from fashion.pipeline.index import IndexBuilder  # noqa: E402
-from tests.conftest import make_outfit  # noqa: E402
+from fashion.adapters.embed_fake import FakeEmbedder
+from fashion.adapters.gen_null import NullGenerationProvider, NullTryOnProvider
+from fashion.adapters.jobs_store import InMemoryJobStore
+from fashion.adapters.store_memory import InMemoryVectorStore
+from fashion.adapters.vision_fake import FakeVisionModel
+from fashion.api.app import Deps, create_app
+from fashion.config import Settings
+from fashion.core.feedback import FeedbackLog
+from fashion.core.models import BodyShape, Build, CelebrityProfile, HeightBand
+from fashion.core.ratelimit import (
+    DailyQuota,
+    SlidingWindowLimiter,
+    TtlCache,
+)
+from fashion.pipeline.index import IndexBuilder
+from tests.conftest import make_outfit
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"fake-image-payload" * 8
 
@@ -48,6 +54,13 @@ class StubDeps(Deps):
         self.generator = NullGenerationProvider()
         self.tryon = NullTryOnProvider()
         self.executor = None  # type: ignore[assignment]
+        # Generous limits: these tests exercise the contract, not the throttle. The
+        # limiter has its own unit tests where the bounds are the subject.
+        self.per_minute = SlidingWindowLimiter(1000, 60)
+        self.per_hour = SlidingWindowLimiter(1000, 3600)
+        self.quota = DailyQuota(1000)
+        self.results = TtlCache(max_entries=64)
+        self.feedback = FeedbackLog(tmp_path / "feedback.jsonl")
 
         items = []
         profiles = {}

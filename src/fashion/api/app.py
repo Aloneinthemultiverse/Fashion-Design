@@ -12,18 +12,35 @@ have no code that could break it.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from fashion.adapters.jobs_store import InMemoryJobStore
 from fashion.config import Settings, load_settings
+from fashion.core.feedback import FeedbackEvent, FeedbackLog, Verdict
 from fashion.core.jobs import Job, JobStore
 from fashion.core.models import BodyShape, Culture, Occasion, UserQuery
+from fashion.core.ratelimit import (
+    DailyQuota,
+    SlidingWindowLimiter,
+    TtlCache,
+    cache_key,
+)
 from fashion.factory import (
     build_embedder,
     build_generation,
@@ -43,6 +60,18 @@ ALLOWED_IMAGE_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
 # would let a burst of uploads exhaust the daily quota in seconds.
 MAX_CONCURRENT_JOBS = 4
 
+# Per-IP limits. The architecture document allows 50 requests/minute, but that predates
+# the free-tier VLM: at 50/min a single client exhausts a 1,500/day quota in half an
+# hour, so the sustained hourly limit is the one that actually protects the budget.
+REQUESTS_PER_MINUTE = 12
+REQUESTS_PER_HOUR = 60
+
+# Whole-deployment ceiling on VLM spend, held below the provider's ~1,500/day so
+# labelling runs retain headroom.
+DAILY_VLM_BUDGET = 1200
+
+RESULT_TTL_SECONDS = 24 * 3600
+
 
 class Deps:
     """Process-wide singletons.
@@ -60,6 +89,11 @@ class Deps:
         self.generator = build_generation(self.settings)
         self.tryon = build_tryon(self.settings)
         self.executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS)
+        self.per_minute = SlidingWindowLimiter(REQUESTS_PER_MINUTE, 60)
+        self.per_hour = SlidingWindowLimiter(REQUESTS_PER_HOUR, 3600)
+        self.quota = DailyQuota(DAILY_VLM_BUDGET)
+        self.results = TtlCache(max_entries=512)
+        self.feedback = FeedbackLog(self.settings.data_dir / "feedback.jsonl")
         # The in-memory store is process-local and starts empty; without this the API
         # serves an empty corpus and every request returns no recommendations.
         load_corpus(self.embedder, self.store, self.settings)
@@ -79,6 +113,19 @@ class SubmitResponse(BaseModel):
     job_id: str
     state: str
     poll_url: str
+
+
+class FeedbackRequest(BaseModel):
+    outfit_id: str
+    verdict: Literal["up", "down"]
+    body_shape: str
+    # Required, not defaulted: a thumbs-down on a shape the model guessed wrong says
+    # nothing about the recommendation, and the two cases must stay distinguishable.
+    shape_was_confirmed: bool
+    query_text: str = ""
+    matched_on: list[str] = []
+    relaxed: bool = False
+    note: str = ""
 
 
 class JobResponse(BaseModel):
@@ -116,8 +163,38 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             "tryon_available": d.tryon.available,
         }
 
+    @app.get("/metrics")
+    def metrics() -> dict[str, Any]:
+        """Operational signal: cache effectiveness, quota burn, user satisfaction."""
+        return {
+            "cache_hit_rate": d.results.hit_rate,
+            "cache_hits": d.results.hits,
+            "cache_misses": d.results.misses,
+            "vlm_quota_used": d.quota.used,
+            "vlm_quota_limit": DAILY_VLM_BUDGET,
+            "corpus_size": d.store.count(),
+            "feedback": d.feedback.summary(),
+        }
+
+    @app.post("/feedback", status_code=204)
+    def record_feedback(body: FeedbackRequest) -> Response:
+        d.feedback.record(
+            FeedbackEvent(
+                outfit_id=body.outfit_id,
+                verdict=Verdict(body.verdict),
+                body_shape=body.body_shape,
+                shape_was_confirmed=body.shape_was_confirmed,
+                query_text=body.query_text,
+                matched_on=tuple(body.matched_on),
+                relaxed=body.relaxed,
+                note=body.note,
+            )
+        )
+        return Response(status_code=204)
+
     @app.post("/recommendations", status_code=202, response_model=SubmitResponse)
     async def submit(
+        request: Request,
         background: BackgroundTasks,
         photo: Annotated[UploadFile, File(description="Full-body photo")],
         text: Annotated[str, Form()] = "",
@@ -129,6 +206,16 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         want_generation: Annotated[bool, Form()] = True,
         want_tryon: Annotated[bool, Form()] = True,
     ) -> SubmitResponse:
+        client = request.client.host if request.client else "unknown"
+        for limiter in (d.per_minute, d.per_hour):
+            decision = limiter.check(client)
+            if not decision.allowed:
+                raise HTTPException(
+                    429,
+                    detail=f"Rate limited. Retry in {decision.retry_after_seconds:.0f}s.",
+                    headers={"Retry-After": str(int(decision.retry_after_seconds) + 1)},
+                )
+
         if photo.content_type not in ALLOWED_IMAGE_TYPES:
             raise HTTPException(
                 415, f"Unsupported image type {photo.content_type!r}. Use JPEG, PNG or WebP."
@@ -152,8 +239,32 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
 
+        # Identical photo plus identical query means an identical answer, and the
+        # expensive part is a metered VLM call. Serving the cached job costs nothing
+        # and is the single largest saving available on the free tier.
+        key = cache_key(
+            hashlib.sha256(data).hexdigest(),
+            query.model_dump(mode="json"),
+            shape.value if shape else None,
+            want_generation,
+            want_tryon,
+        )
+        cached_id = d.results.get(key)
+        if isinstance(cached_id, str) and d.jobs.get(cached_id) is not None:
+            return SubmitResponse(
+                job_id=cached_id, state="done", poll_url=f"/recommendations/{cached_id}"
+            )
+
+        # Only charge the daily VLM budget for work that will actually run.
+        if not d.quota.spend().allowed:
+            raise HTTPException(
+                503,
+                detail=("The daily vision-model budget is exhausted. It resets at midnight UTC."),
+            )
+
         job = Job()
         d.jobs.create(job)
+        d.results.set(key, job.id, RESULT_TTL_SECONDS)
 
         # FastAPI's BackgroundTasks runs after the response is sent, so the client gets
         # its job id immediately rather than waiting on the pipeline.

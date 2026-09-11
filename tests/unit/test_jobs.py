@@ -207,9 +207,7 @@ def test_confirmed_shape_overrides_inference_and_raises_confidence(
     pipeline: tuple[RecommendationPipeline, InMemoryJobStore],
 ) -> None:
     engine, _ = pipeline
-    job = engine.run(
-        Job(), b"a-photo", UserQuery(text="x"), confirmed_shape=BodyShape.HOURGLASS
-    )
+    job = engine.run(Job(), b"a-photo", UserQuery(text="x"), confirmed_shape=BodyShape.HOURGLASS)
     result = job.stage(StageName.ANALYZE).result
     assert result is not None
     assert result["shape"] == "hourglass"
