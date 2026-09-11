@@ -147,6 +147,38 @@ the UI all run against them.
 4. **A decision on Instagram.** The adapter is written and tested but never runs
    by default. See `docs/adr/0003`.
 
+## Measuring retrieval quality
+
+```bash
+uv run python scripts/evaluate.py --embed openclip --probes
+```
+
+Unit tests cannot tell a semantically meaningful index from a meaningless one — the
+fake embedder satisfies every structural property while encoding nothing. This
+script separates the two concerns:
+
+- **self-retrieval** — a wiring check any working index passes;
+- **caption-to-image** — querying image vectors with text embeddings, which needs
+  both a real dual encoder *and* truthful captions;
+- **`--probes`** — hand-written queries verified against the actual photographs,
+  which isolate the encoder from the captions.
+
+Current readings on the 32-item seed corpus:
+
+| | self-retrieval | caption-to-image (chance = 16.5) |
+|---|---|---|
+| `fake` | 32/32 | median rank 17.5 |
+| `openclip` | 32/32 | median rank 15.5 |
+
+Both sit at chance on caption-to-image, but for different reasons. The probes show
+OpenCLIP is working correctly — "a man wearing a formal black tuxedo and bow tie"
+returns the tuxedo photo, and "a person on a red carpet at a film festival" returns
+three festival photographs it identified from pixels alone. **The captions are the
+bottleneck**: they came from the fake VLM and describe garments the photos do not
+contain, so a correct encoder has nothing to match. This number should move once
+the corpus is relabelled with a real VLM, and is the cheapest way to confirm the
+relabelling worked.
+
 ## Known limits
 
 - Rate limiters and the result cache are in-process: correct for one node, wrong

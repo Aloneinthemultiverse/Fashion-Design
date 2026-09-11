@@ -49,11 +49,45 @@ def rank_of(hits: list, item_id: str) -> int | None:
     return None
 
 
+# Hand-written probes, checked against the actual photographs. These isolate the
+# embedder from the corpus captions: the seed captions were produced by the fake VLM
+# and describe garments that are not in the images, so a poor cross-modal score cannot
+# distinguish "the embedder is blind" from "the captions are wrong". Querying with
+# text a human verified against the pictures separates the two.
+PROBES = [
+    "a man wearing a formal black tuxedo and bow tie",
+    "a woman wearing a colourful traditional Indian saree",
+    "a person on a red carpet at a film festival",
+    "a close-up portrait of a person smiling",
+]
+
+
+def run_probes(embedder: Embedder, store: object, top: int = 3) -> None:
+    """Print the top matches for each probe so they can be eyeballed."""
+    print("probe queries (text -> image, judge these by looking at the files):")
+    print()
+    for probe in PROBES:
+        hits = store.search(  # type: ignore[attr-defined]
+            embedder.embed_text(probe), using=IMAGE_VECTOR, limit=top
+        )
+        print(f"  {probe!r}")
+        for hit in hits:
+            name = Path(str(hit.payload.get("image_path", ""))).name
+            print(f"    {hit.score:.3f}  {name[:68]}")
+        print()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=Path("data/seed"))
     parser.add_argument("--embed", choices=["fake", "openclip"], default="openclip")
     parser.add_argument("--limit", type=int, default=None, help="cap items, for speed")
+    parser.add_argument(
+        "--probes",
+        action="store_true",
+        help="Also run hand-written probe queries, which isolate the embedder from "
+        "the corpus captions.",
+    )
     args = parser.parse_args()
 
     items, _ = OutfitRepository(args.data_dir / "labels.jsonl").load()
@@ -98,14 +132,23 @@ def main() -> int:
     print("  (wiring check -- any working index passes this)\n")
     print(f"cross-modal median rank   {median_rank:.1f}  (chance = {chance:.1f})")
     print(f"cross-modal top-5 rate    {top5:.0%}")
-    print("  (semantic check -- only a real dual encoder beats chance)\n")
+    print("  (semantic check -- needs both a real encoder and truthful captions)\n")
+
+    if args.probes:
+        run_probes(embedder, store)
 
     if median_rank < chance * 0.6:
-        print("VERDICT: the embedder understands the images.")
+        print("VERDICT: caption-to-image retrieval carries real signal.")
         return 0
+
     print(
-        "VERDICT: cross-modal retrieval is at or near chance. The index is wired\n"
-        "         correctly but carries no semantic signal -- expected for --embed fake."
+        "VERDICT: caption-to-image retrieval is at or near chance.\n"
+        "\n"
+        "         This measures the embedder AND the captions together, so on its own\n"
+        "         it cannot say which is at fault. With --embed fake the embedder is\n"
+        "         the known cause. With a real embedder, suspect the captions first:\n"
+        "         a caption describing a garment the photo does not contain gives a\n"
+        "         correct encoder nothing to match. Use --probes to separate them."
     )
     return 0
 
