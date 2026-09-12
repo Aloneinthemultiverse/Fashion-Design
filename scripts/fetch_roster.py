@@ -49,6 +49,7 @@ def main() -> int:
     # the last region failed would waste all the preceding work.
     roster = []
     by_region: dict[str, int] = {}
+    by_wardrobe: dict[str, int] = {}
     seen: set[str] = set()
 
     with args.out.open("w", encoding="utf-8") as fh:
@@ -63,11 +64,19 @@ def main() -> int:
                 fh.write(json.dumps(asdict(candidate), ensure_ascii=False) + "\n")
             fh.flush()
             by_region[region] = len(found)
+            for candidate in found:
+                key = candidate.wardrobe or "unknown"
+                by_wardrobe[key] = by_wardrobe.get(key, 0) + 1
             print(f"  {region}: {len(found)}", flush=True)
 
     print(f"wrote {len(roster)} celebrities to {args.out}")
     for region, count in sorted(by_region.items()):
         print(f"  {region:<10} {count:>5}")
+    print("by wardrobe:")
+    for key, count in sorted(by_wardrobe.items()):
+        print(f"  {key:<12} {count:>5}")
+    with_ig = sum(1 for c in roster if c.instagram)
+    print(f"with Instagram handle: {with_ig}")
     return 0
 
 

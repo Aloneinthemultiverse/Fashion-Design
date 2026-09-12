@@ -43,7 +43,10 @@ STYLE_SUFFIX = (
 # clothes anyone could buy or wear.
 AVOID = (
     "not shirtless, not bare-chested, no mythological or costume dress, "
-    "no fantasy armour, no body paint"
+    "no fantasy armour, no body paint, "
+    # Without this the subject drifts feminine regardless of the stated wearer: the
+    # model's fashion imagery is overwhelmingly womenswear, so it pulls that way.
+    "not androgynous, correct gender presentation for the stated wearer"
 )
 
 

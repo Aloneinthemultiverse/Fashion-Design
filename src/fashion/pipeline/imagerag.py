@@ -196,9 +196,15 @@ class ImageRagGenerator:
         # woman for a male user -- the single most visibly wrong output this system has
         # produced.
         wardrobe = query.wardrobe or metrics.wardrobe
+        # "a man wearing" alone is too weak: the model still produced a feminine face
+        # and frame, because the garment words dominate and most fashion imagery it
+        # learned from is womenswear. Naming build and features explicitly is what
+        # actually shifts it.
         subject = {
-            Wardrobe.MENSWEAR: "a man wearing",
-            Wardrobe.WOMENSWEAR: "a woman wearing",
+            Wardrobe.MENSWEAR: (
+                "a young adult man with a masculine face, short hair and a flat chest, wearing"
+            ),
+            Wardrobe.WOMENSWEAR: "a young adult woman wearing",
         }.get(wardrobe, "a person wearing")
 
         # Name concrete garments for the wardrobe. An abstract brief leaves the

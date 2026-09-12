@@ -36,6 +36,14 @@ MODEL = "wd:Q4610556"
 FEMALE = "wd:Q6581072"
 MALE = "wd:Q6581097"
 
+# Wikidata Q-ids for P21, mapped to the wardrobe the person's clothing usually comes
+# from. This is used to *target scraping*, never to label a user: it answers "whose
+# Instagram should I read to build a menswear corpus", which is a sourcing question.
+GENDER_TO_WARDROBE = {
+    "Q6581097": "menswear",
+    "Q6581072": "womenswear",
+}
+
 REGIONS: dict[str, str] = {
     "indian": "wd:Q668",
     "american": "wd:Q30",
@@ -51,7 +59,10 @@ class CelebrityCandidate:
     name: str
     region: str
     image_url: str
-    gender: str = ""
+    # The wardrobe this person's clothing is likely to come from, derived from P21.
+    # Empty when Wikidata has no value or one this does not map, which is treated as
+    # unknown rather than guessed.
+    wardrobe: str = ""
     height_cm: float | None = None
     # Wikidata P2003. The scraper addresses accounts by handle, not display name, so
     # without this the dynamic Instagram layer has nothing to work with.
@@ -126,13 +137,14 @@ class WikidataCelebrityDirectory:
         # ORDER BY makes paging stable -- without it the endpoint may return overlapping
         # or missing rows across offsets.
         sparql = f"""
-        SELECT ?person ?personLabel ?image ?height ?instagram WHERE {{
+        SELECT ?person ?personLabel ?image ?height ?instagram ?gender WHERE {{
           ?person wdt:P31 {HUMAN} ;
                   wdt:P106 {occupation} ;
                   wdt:P27 {REGIONS[region]} {gender_clause};
                   wdt:P18 ?image .
           OPTIONAL {{ ?person wdt:P2048 ?height . }}
           OPTIONAL {{ ?person wdt:P2003 ?instagram . }}
+          OPTIONAL {{ ?person wdt:P21 ?gender . }}
           SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
         }}
         ORDER BY ?person
@@ -152,7 +164,9 @@ class WikidataCelebrityDirectory:
                 name=name,
                 region=region,
                 image_url=row["image"]["value"],
-                gender=gender or "",
+                wardrobe=GENDER_TO_WARDROBE.get(
+                    row.get("gender", {}).get("value", "").rsplit("/", 1)[-1], ""
+                ),
                 height_cm=float(height_raw) if height_raw else None,
                 instagram=row.get("instagram", {}).get("value", "").strip().lstrip("@"),
             )
