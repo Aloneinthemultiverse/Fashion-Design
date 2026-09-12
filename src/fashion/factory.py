@@ -31,6 +31,23 @@ def build_vision(settings: Settings | None = None) -> VisionModel:
     if settings.vision_provider == "fake":
         return FakeVisionModel()
 
+    if settings.vision_provider == "proxy":
+        from fashion.adapters.vision_proxy import ProxyVisionModel
+
+        proxy = ProxyVisionModel(
+            settings.proxy_url,
+            model=settings.proxy_model,
+            cache_dir=settings.cache_dir / "proxy",
+        )
+        if not proxy.available():
+            log.warning(
+                "vision_provider=proxy but %s is not reachable; falling back to the "
+                "fake model. Start it with `npx antigravity-claude-proxy@latest start`.",
+                settings.proxy_url,
+            )
+            return FakeVisionModel()
+        return proxy
+
     if settings.vision_provider == "gemini":
         if not settings.gemini_api_key:
             log.warning(
@@ -50,13 +67,27 @@ def build_vision(settings: Settings | None = None) -> VisionModel:
 
 
 def build_embedder(settings: Settings | None = None) -> Embedder:
+    """Build the embedder, wrapped in a disk cache.
+
+    The cache matters most for the real encoder: without it a 2,000-outfit corpus costs
+    about eleven minutes of CPU on every process start. The fake embedder is cached too
+    so both paths exercise the same code.
+    """
     settings = settings or load_settings()
+
+    inner: Embedder
+    model_id: str
     if settings.embed_provider == "fake":
-        return FakeEmbedder()
+        inner, model_id = FakeEmbedder(), "fake"
+    else:
+        from fashion.adapters.embed_openclip import OpenClipEmbedder
 
-    from fashion.adapters.embed_openclip import OpenClipEmbedder
+        inner = OpenClipEmbedder(settings.clip_model, settings.clip_pretrained)
+        model_id = f"{settings.clip_model}:{settings.clip_pretrained}"
 
-    return OpenClipEmbedder(settings.clip_model, settings.clip_pretrained)
+    from fashion.adapters.embed_cache import CachingEmbedder
+
+    return CachingEmbedder(inner, settings.cache_dir / "embeddings", model_id=model_id)
 
 
 def build_store(settings: Settings | None = None) -> VectorStore:

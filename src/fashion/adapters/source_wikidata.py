@@ -53,6 +53,9 @@ class CelebrityCandidate:
     image_url: str
     gender: str = ""
     height_cm: float | None = None
+    # Wikidata P2003. The scraper addresses accounts by handle, not display name, so
+    # without this the dynamic Instagram layer has nothing to work with.
+    instagram: str = ""
 
     @property
     def id(self) -> str:
@@ -123,12 +126,13 @@ class WikidataCelebrityDirectory:
         # ORDER BY makes paging stable -- without it the endpoint may return overlapping
         # or missing rows across offsets.
         sparql = f"""
-        SELECT ?person ?personLabel ?image ?height WHERE {{
+        SELECT ?person ?personLabel ?image ?height ?instagram WHERE {{
           ?person wdt:P31 {HUMAN} ;
                   wdt:P106 {occupation} ;
                   wdt:P27 {REGIONS[region]} {gender_clause};
                   wdt:P18 ?image .
           OPTIONAL {{ ?person wdt:P2048 ?height . }}
+          OPTIONAL {{ ?person wdt:P2003 ?instagram . }}
           SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
         }}
         ORDER BY ?person
@@ -150,6 +154,7 @@ class WikidataCelebrityDirectory:
                 image_url=row["image"]["value"],
                 gender=gender or "",
                 height_cm=float(height_raw) if height_raw else None,
+                instagram=row.get("instagram", {}).get("value", "").strip().lstrip("@"),
             )
 
     def fetch_roster(

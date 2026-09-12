@@ -19,9 +19,11 @@ class Settings(BaseSettings):
         env_prefix="FASHION_", env_file=".env", extra="ignore", frozen=True
     )
 
-    vision_provider: Literal["fake", "gemini", "qwen_local"] = "fake"
+    vision_provider: Literal["fake", "proxy", "gemini", "qwen_local"] = "fake"
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
+    proxy_url: str = "http://localhost:8080"
+    proxy_model: str = "gemini-3.6-flash-high"
 
     embed_provider: Literal["fake", "openclip"] = "fake"
     clip_model: str = "ViT-B-32"
