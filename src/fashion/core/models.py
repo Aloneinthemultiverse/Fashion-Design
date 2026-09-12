@@ -93,6 +93,10 @@ class BodyMetrics(Frozen):
     waist_hip_ratio: float | None = Field(default=None, gt=0, lt=5)
     confidence: float = Field(ge=0.0, le=1.0, default=0.5)
     user_confirmed: bool = False
+    # Whether the whole body was in frame. Without it a caller cannot tell a measured
+    # hip from an estimated one, and every downstream reliability check silently
+    # degrades to "unknown".
+    full_body: bool = False
 
     @property
     def is_trustworthy(self) -> bool:

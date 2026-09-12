@@ -312,9 +312,11 @@ class ProxyVisionModel:
         if any(r <= 0.2 or r >= 4.0 for r in ratios):
             raise UnusableAnalysisError(f"implausible width ratios {ratios}")
         confidence = confidence_from_ratios(proportions)
-        if not data.get("full_body_visible", True):
+        full_body = bool(data.get("full_body_visible", False))
+        if not full_body:
             confidence *= 0.5
         return BodyMetrics(
+            full_body=full_body,
             shape=classify(proportions),
             build=Build(str(data.get("build", Build.ATHLETIC.value))),
             height_band=HeightBand(str(data.get("height_band", HeightBand.AVERAGE.value))),

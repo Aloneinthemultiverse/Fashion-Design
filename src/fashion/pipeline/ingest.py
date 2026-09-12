@@ -192,7 +192,11 @@ class Ingestor:
                 build=metrics.build,
                 height_band=metrics.height_band,
                 style_tags=item.style_tags,
-                full_body=bool(tags.get("full_body_visible", False)),
+                # From the body analysis, not the outfit tags: the outfit object has a
+                # field of the same name describing whether the *garment* is fully
+                # visible, which is a different question and was silently making every
+                # profile look unmeasurable.
+                full_body=metrics.full_body,
                 shape_confidence=metrics.confidence,
             )
             profiles[row.id] = profile

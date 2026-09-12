@@ -47,6 +47,29 @@ def measurements_by_image(cache_dir: Path) -> dict[str, dict[str, Any]]:
     return out
 
 
+# Models whose responses may still sit in the cache under the older key form.
+LEGACY_MODELS = (
+    "gemini-3.6-flash-high",
+    "gemini-3.5-flash",
+    "claude-sonnet-4-6",
+)
+
+
+def _key_for(probe: Any, image: bytes, model: str | None) -> str:
+    """Reproduce a cache key, optionally in the pre-change form that included the model."""
+    import hashlib
+
+    from fashion.adapters.prompts import ANALYSIS_PROMPT, ANALYSIS_SYSTEM
+
+    digest = hashlib.sha256()
+    digest.update(b"analyze_all")
+    if model is not None:
+        digest.update(model.encode())
+    digest.update((ANALYSIS_PROMPT + ANALYSIS_SYSTEM).encode())
+    digest.update(hashlib.sha256(image).digest())
+    return digest.hexdigest()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=Path("data/seed"))
@@ -64,7 +87,6 @@ def main() -> int:
 
     # Rebuild the cache key the adapter uses, so a cached analysis can be found from
     # the image it came from.
-    from fashion.adapters.prompts import ANALYSIS_PROMPT, ANALYSIS_SYSTEM
     from fashion.adapters.vision_proxy import ProxyVisionModel
     from fashion.config import load_settings
 
@@ -83,10 +105,16 @@ def main() -> int:
             missing += 1
             continue
 
-        key = probe._cache_key(
-            "analyze_all", ANALYSIS_PROMPT + ANALYSIS_SYSTEM, (image_path.read_bytes(),)
-        )
-        body = cached.get(key)
+        # The cache key stopped including the model name, which orphaned entries
+        # written earlier. Try the current form first, then each historical model, so a
+        # threshold change never costs quota to re-derive measurements we already have.
+        image_bytes = image_path.read_bytes()
+        body = None
+        for legacy_model in (None, *LEGACY_MODELS):
+            key = _key_for(probe, image_bytes, legacy_model)
+            body = cached.get(key)
+            if body is not None:
+                break
         if body is None:
             updated[cid] = profile
             missing += 1
