@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from fashion.core.dataset import CelebrityRepository, OutfitRepository, iter_jsonl
 from fashion.core.models import BodyShape, Build, CelebrityProfile, HeightBand
 from tests.conftest import make_outfit
@@ -133,3 +135,31 @@ def test_as_str_tuple_handles_the_shapes_a_vlm_actually_returns() -> None:
     assert as_str_tuple(("a",)) == ("a",)
     assert as_str_tuple([1, 2]) == ("1", "2")
     assert as_str_tuple(42) == ()
+
+
+def test_run_lock_blocks_a_second_run(tmp_path: Path) -> None:
+    """Two concurrent ingests corrupt the corpus in a way that is easy to miss.
+
+    Both append outfits so the label file grows with duplicates, and each holds its own
+    profile dict which it writes over the whole profiles file -- producing a healthy
+    outfit count beside a silently lagging profile count. This happened before the lock
+    existed.
+    """
+    from fashion.core.dataset import AlreadyRunningError, RunLock
+
+    lock = tmp_path / "run.lock"
+    with RunLock(lock):
+        assert lock.exists()
+        with pytest.raises(AlreadyRunningError, match="another run holds"), RunLock(lock):
+            pass
+    assert not lock.exists()
+
+
+def test_run_lock_releases_on_failure(tmp_path: Path) -> None:
+    """A crashed run must not leave the corpus permanently locked."""
+    from fashion.core.dataset import RunLock
+
+    lock = tmp_path / "run.lock"
+    with pytest.raises(RuntimeError, match="boom"), RunLock(lock):
+        raise RuntimeError("boom")
+    assert not lock.exists()

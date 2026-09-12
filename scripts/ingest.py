@@ -25,7 +25,13 @@ from pathlib import Path
 from fashion.adapters.source_wikimedia import WikimediaImageSource
 from fashion.adapters.vision_fake import FakeVisionModel
 from fashion.config import load_settings
-from fashion.core.dataset import CelebrityRepository, OutfitRepository, iter_jsonl
+from fashion.core.dataset import (
+    AlreadyRunningError,
+    CelebrityRepository,
+    OutfitRepository,
+    RunLock,
+    iter_jsonl,
+)
 from fashion.pipeline.ingest import Ingestor, RosterRow
 from fashion.ports.vision import VisionModel
 
@@ -97,7 +103,11 @@ def main() -> int:
         require_clear_outfit=not args.keep_unclear,
     )
 
-    stats = ingestor.run(rows, limit=args.limit)
+    try:
+        with RunLock(args.data_dir / ".ingest.lock"):
+            stats = ingestor.run(rows, limit=args.limit)
+    except AlreadyRunningError as exc:
+        raise SystemExit(str(exc)) from exc
 
     print(f"\nseen              {stats.seen}")
     print(f"written           {stats.written}")

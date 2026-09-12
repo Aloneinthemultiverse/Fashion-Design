@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -163,3 +165,43 @@ def iter_jsonl(path: Path) -> Iterator[dict[str, object]]:
                 continue
             if isinstance(row, dict):
                 yield row
+
+
+class AlreadyRunningError(RuntimeError):
+    """Raised when another run holds the lock."""
+
+
+class RunLock:
+    """Exclusive lock for a long ingest run.
+
+    Two concurrent runs over the same corpus corrupt it in a way that is easy to miss:
+    both append outfits, so the file grows with duplicates, and both hold their own
+    in-memory profile dict which they alternately write over the whole profiles file.
+    The result is an outfit count that looks healthy beside a profile count that
+    silently lags. That happened; this prevents it.
+
+    Uses exclusive file creation, which is atomic on every platform, rather than a
+    check-then-write that races.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._held = False
+
+    def __enter__(self) -> RunLock:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with self._path.open("x", encoding="utf-8") as fh:
+                fh.write(f"pid={os.getpid()} started={datetime.now(UTC).isoformat()}")
+        except FileExistsError:
+            raise AlreadyRunningError(
+                f"another run holds {self._path}. Stop it first, or delete the file if "
+                "no run is active."
+            ) from None
+        self._held = True
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self._held:
+            self._path.unlink(missing_ok=True)
+            self._held = False
