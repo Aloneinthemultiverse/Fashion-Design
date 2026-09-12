@@ -107,7 +107,18 @@ class CelebrityProfile(Frozen):
     build: Build
     height_band: HeightBand
     style_tags: tuple[str, ...] = ()
+    # Whether the photo this shape was derived from showed the whole body. Commons is
+    # mostly red-carpet portraits, so hips are often out of frame and the hip width is
+    # an estimate -- which biases the shape toward inverted_triangle. Recording it lets
+    # retrieval prefer profiles that were actually measurable instead of silently
+    # treating a guess as a measurement.
+    full_body: bool = False
+    shape_confidence: float = 0.0
     updated_at: datetime | None = None
+
+    @property
+    def shape_is_reliable(self) -> bool:
+        return self.full_body and self.shape_confidence >= 0.5
 
 
 class OutfitItem(Frozen):

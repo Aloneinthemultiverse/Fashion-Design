@@ -42,6 +42,8 @@ def build_payload(item: OutfitItem, profile: CelebrityProfile) -> dict[str, obje
         "body_shape": profile.shape.value,
         "build": profile.build.value,
         "height_band": profile.height_band.value,
+        # "true"/"false" as strings: the store filters on exact string values.
+        "shape_reliable": "true" if profile.shape_is_reliable else "false",
         # Garment attributes.
         "garment_type": item.garment_type,
         "silhouette": item.silhouette.value,

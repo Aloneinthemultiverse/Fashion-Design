@@ -43,7 +43,7 @@ log = logging.getLogger(__name__)
 DEFAULT_URL = "http://localhost:8080"
 DEFAULT_MODEL = "gemini-3.6-flash-high"
 DEFAULT_TIMEOUT = 180.0
-MAX_TOKENS = 2048
+MAX_TOKENS = 4096
 
 # The proxy authenticates through its own Google session; the token is a placeholder
 # the Anthropic wire format requires but the proxy ignores.
@@ -195,6 +195,12 @@ class ProxyVisionModel:
         blocks = body.get("content") or []
         text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict))
         parsed = extract_json(text)
+        stop = body.get("stop_reason")
+        if stop == "max_tokens":
+            # The outer JSON object is unclosed, so extract_json recovers only a nested
+            # fragment. Caching that would bake a half-record into the corpus.
+            log.warning("response for %s hit the token limit and was discarded", task)
+            return {}
         parsed.setdefault("_raw", text[:2000])
         self._store(key, parsed)
         return parsed

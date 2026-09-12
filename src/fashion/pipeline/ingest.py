@@ -184,7 +184,7 @@ class Ingestor:
                 continue
 
             self._outfits.append(item)
-            profiles[row.id] = CelebrityProfile(
+            profile = CelebrityProfile(
                 id=row.id,
                 name=row.name,
                 region=row.region,
@@ -192,7 +192,15 @@ class Ingestor:
                 build=metrics.build,
                 height_band=metrics.height_band,
                 style_tags=item.style_tags,
+                full_body=bool(tags.get("full_body_visible", False)),
+                shape_confidence=metrics.confidence,
             )
+            profiles[row.id] = profile
+            # Flush profiles as they are produced, not only at the end. A full pass
+            # takes hours; losing every body shape to a crash in the final hour would
+            # be unrecoverable, and rewriting the file per item is cheap next to the
+            # model call that produced it.
+            self._celebrities.save(profiles.values())
             stats = stats.merge(written=1)
 
         self._celebrities.save(profiles.values())

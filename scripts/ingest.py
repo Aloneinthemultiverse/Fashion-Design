@@ -34,6 +34,22 @@ def build_vision(kind: str) -> VisionModel:
     if kind == "fake":
         return FakeVisionModel()
 
+    if kind == "proxy":
+        from fashion.adapters.vision_proxy import ProxyVisionModel
+
+        settings = load_settings()
+        proxy = ProxyVisionModel(
+            settings.proxy_url,
+            model=settings.proxy_model,
+            cache_dir=settings.cache_dir / "proxy",
+        )
+        if not proxy.available():
+            raise SystemExit(
+                f"the proxy at {settings.proxy_url} is not reachable. Start it with "
+                "`npx antigravity-claude-proxy@latest start`."
+            )
+        return proxy
+
     from fashion.adapters.vision_gemini import GeminiVisionModel
 
     settings = load_settings()
@@ -54,7 +70,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--roster", type=Path, default=Path("data/seed/celebrities.jsonl"))
     parser.add_argument("--data-dir", type=Path, default=Path("data/seed"))
-    parser.add_argument("--vision", choices=["fake", "gemini"], default="fake")
+    parser.add_argument("--vision", choices=["fake", "proxy", "gemini"], default="fake")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument(
         "--keep-unclear",
