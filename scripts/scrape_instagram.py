@@ -186,7 +186,7 @@ def main() -> int:
 
     source = ImginnImageSource(args.data_dir / "instagram")
     vision = build_vision(args.vision)
-    written = skipped = failed = new_profiles = 0
+    written = skipped = failed = new_profiles = mismatched = 0
 
     try:
         lock = RunLock(args.data_dir / ".scrape.lock")
@@ -240,6 +240,24 @@ def main() -> int:
                     continue
                 if tags.get("outfit_clearly_visible") is False:
                     skipped += 1
+                    continue
+
+                # An Instagram feed is not reliably *of* its owner: it carries co-stars,
+                # family and promotional shots. A garment from the opposite wardrobe to
+                # the account holder is the clearest available signal that the photo is
+                # of someone else -- two sarees were attributed to male celebrities
+                # before this check existed, and would have been matched to male users.
+                garment_wardrobe = str(tags.get("wardrobe") or "unisex")
+                if (
+                    entry.wardrobe
+                    and garment_wardrobe != "unisex"
+                    and garment_wardrobe != entry.wardrobe
+                ):
+                    print(
+                        f"  ~ skipped {tags.get('garment_type')} "
+                        f"({garment_wardrobe}): probably not {entry.name}"
+                    )
+                    mismatched += 1
                     continue
 
                 try:
