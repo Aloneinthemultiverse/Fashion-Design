@@ -46,7 +46,16 @@ ASSET_MARKER = "assets.imginn.com"
 # The profile avatar is served at a fixed thumbnail size and is not an outfit.
 AVATAR_WIDTH = "77"
 
-MIN_SECONDS_BETWEEN_PROFILES = 4.0
+# Each profile launches a stealth browser and solves a Cloudflare challenge, which takes
+# roughly fifteen seconds on its own. Spacing them tighter than that piles up browser
+# startups until DNS inside the browser starts failing outright -- the symptom is
+# ERR_NAME_NOT_RESOLVED on every profile while the host resolves fine from the shell.
+MIN_SECONDS_BETWEEN_PROFILES = 15.0
+
+# Transient browser-level failures are common enough at this cadence that one retry is
+# worth more than the seconds it costs.
+FETCH_ATTEMPTS = 2
+RETRY_BACKOFF = 20.0
 DOWNLOAD_TIMEOUT = 45.0
 
 USER_AGENT = (
@@ -108,20 +117,26 @@ class ImginnImageSource:
 
     def _posts(self, handle: str) -> list[MirrorPost]:
         """Scrape one profile page into post image URLs and captions."""
-        self._throttle()
-        try:
-            page = self._get_fetcher().fetch(
-                f"{MIRROR}/{handle}/",
-                headless=True,
-                solve_cloudflare=True,
-                network_idle=True,
-                timeout=90000,
-            )
-        except Exception:
-            log.warning("mirror fetch failed for %r", handle, exc_info=True)
-            return []
+        page = None
+        for attempt in range(FETCH_ATTEMPTS):
+            self._throttle()
+            try:
+                page = self._get_fetcher().fetch(
+                    f"{MIRROR}/{handle}/",
+                    headless=True,
+                    solve_cloudflare=True,
+                    network_idle=True,
+                    timeout=90000,
+                )
+                break
+            except Exception as exc:
+                if attempt == FETCH_ATTEMPTS - 1:
+                    log.warning("mirror fetch failed for %r: %s", handle, exc)
+                    return []
+                log.info("retrying %r after %s", handle, type(exc).__name__)
+                time.sleep(RETRY_BACKOFF)
 
-        if getattr(page, "status", 0) != 200:
+        if page is None or getattr(page, "status", 0) != 200:
             log.warning("mirror returned %s for %r", getattr(page, "status", "?"), handle)
             return []
 

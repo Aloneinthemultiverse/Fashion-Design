@@ -22,6 +22,7 @@ from fashion.core.models import (
     OutfitItem,
     Silhouette,
     WaistEmphasis,
+    Wardrobe,
 )
 
 
@@ -42,6 +43,7 @@ class FakeVisionModel:
             shape=list(BodyShape)[s % len(BodyShape)],
             build=list(Build)[(s >> 3) % len(Build)],
             height_band=list(HeightBand)[(s >> 6) % len(HeightBand)],
+            wardrobe=list(Wardrobe)[(s >> 9) % len(Wardrobe)],
             shoulder_waist_ratio=round(1.1 + (s % 40) / 100, 3),
             waist_hip_ratio=round(0.65 + (s % 30) / 100, 3),
             confidence=round(0.5 + (s % 50) / 100, 3),
@@ -54,6 +56,7 @@ class FakeVisionModel:
             "neckline": _pick(image, list(Neckline), 2),
             "waist_emphasis": _pick(image, list(WaistEmphasis), 3),
             "culture": _pick(image, list(Culture), 4),
+            "wardrobe": _pick(image, list(Wardrobe), 6),
             "occasion": _pick(image, list(Occasion), 5),
             "colors": ("crimson", "gold"),
             "patterns": ("embroidered",),

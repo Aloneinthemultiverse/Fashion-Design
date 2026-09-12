@@ -1,20 +1,37 @@
 """Vision model over an Anthropic-compatible proxy.
 
+
+
 Targets antigravity-claude-proxy, which exposes Gemini and Claude behind the Anthropic
+
 Messages API on localhost. That removes the API-key problem entirely: the proxy holds
+
 the Google OAuth session, and this client sends a placeholder token.
+
+
 
 Two consequences worth stating, because they shape the code:
 
+
+
 * **The wire format is Anthropic, not Google.** Images go as base64 `image` content
+
   blocks, and the response is a `content` array of blocks rather than a single `text`.
+
 * **There is no `response_schema`.** Gemini's native API can constrain output to a JSON
+
   schema; the Anthropic format cannot. So the schema is described in the prompt and the
+
   response is parsed defensively -- models wrap JSON in prose or code fences often
+
   enough that treating the whole body as JSON would fail regularly.
 
+
+
 Responses are cached on disk exactly as the direct Gemini adapter does. The proxy is
+
 free, but it is not fast, and a repeated labelling pass should not re-pay that cost.
+
 """
 
 from __future__ import annotations
@@ -36,18 +53,27 @@ from fashion.core.models import (
     HeightBand,
     MissingConcept,
     OutfitItem,
+    Wardrobe,
 )
 
 log = logging.getLogger(__name__)
 
+
 DEFAULT_URL = "http://localhost:8080"
+
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
+
 # Tried in order when the configured model reports exhausted quota. Free-tier capacity
+
 # runs out routinely -- gemini-3 quota vanished mid-labelling-run here, with a 166-hour
+
 # reset -- and a multi-hour pass that dies on the first RESOURCE_EXHAUSTED wastes
+
 # everything after it. Families are interleaved deliberately: they meter separately, so
+
 # the next family is the one likely to still have capacity.
+
 FALLBACK_MODELS = (
     "claude-sonnet-4-6",
     "gemini-3.6-flash-high",
@@ -55,52 +81,106 @@ FALLBACK_MODELS = (
     "claude-opus-4-6-thinking",
 )
 
+
 # Substring identifying a quota refusal in the proxy's error body, as opposed to a
+
 # malformed request, which retrying on another model would not fix.
+
 QUOTA_MARKER = "RESOURCE_EXHAUSTED"
+
 DEFAULT_TIMEOUT = 180.0
+
 MAX_TOKENS = 4096
 
+
 # The proxy authenticates through its own Google session; the token is a placeholder
+
 # the Anthropic wire format requires but the proxy ignores.
+
 PLACEHOLDER_TOKEN = "test"
 
+
 JSON_BLOCK = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def media_type(image: bytes) -> str:
+    """Identify an image from its magic bytes.
+
+
+
+    The media type must match the payload: declaring JPEG for a PNG is rejected outright.
+
+    Hardcoding it worked only because the corpus happens to be JPEG, and broke on the
+
+    first PNG a user supplied -- which is exactly the input that matters most.
+
+    """
+
+    if image.startswith(b"\x89PNG"):
+        return "image/png"
+
+    if image[:4] == b"RIFF" and image[8:12] == b"WEBP":
+        return "image/webp"
+
+    if image.startswith(b"GIF8"):
+        return "image/gif"
+
+    return "image/jpeg"
 
 
 def extract_json(text: str) -> dict[str, Any]:
     """Pull a JSON object out of a model response.
 
+
+
     Without schema-constrained decoding the model may wrap JSON in prose or a fenced
+
     code block. Taking the outermost brace-delimited span recovers it in the cases that
+
     actually occur, and an unparseable response degrades to an empty dict rather than
+
     raising into a user's request.
+
     """
+
     body = text.strip()
+
     if body.startswith("```"):
         body = re.sub(r"^```(?:json)?\s*|\s*```$", "", body, flags=re.MULTILINE).strip()
+
     try:
         parsed = json.loads(body)
+
         return parsed if isinstance(parsed, dict) else {}
+
     except json.JSONDecodeError:
         pass
 
     match = JSON_BLOCK.search(body)
+
     if match:
         try:
             parsed = json.loads(match.group(0))
+
             return parsed if isinstance(parsed, dict) else {}
+
         except json.JSONDecodeError:
             pass
+
     log.warning("could not parse JSON from response: %.160s", body)
+
     return {}
 
 
 class UnusableAnalysisError(ValueError):
     """The model returned measurements that cannot describe a body.
 
+
+
     Distinct from a transport failure: the call succeeded and the answer is unusable, so
+
     the caller should skip this image rather than retry it.
+
     """
 
 
@@ -115,51 +195,76 @@ class ProxyVisionModel:
         cache_dir: Path | None = None,
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
+
         self._url = base_url.rstrip("/")
+
         self._model = model
+
         # Models found exhausted this run, so the next call does not re-pay the timeout
+
         # discovering the same thing.
+
         self._exhausted: set[str] = set()
+
         self._timeout = timeout
+
         self._cache_dir = cache_dir
+
         if cache_dir is not None:
             cache_dir.mkdir(parents=True, exist_ok=True)
 
     # -- transport ---------------------------------------------------------------
 
     def available(self) -> bool:
+
         try:
             request = urllib.request.Request(f"{self._url}/", method="GET")
+
             with urllib.request.urlopen(request, timeout=5) as response:
                 return bool(200 <= int(response.status) < 500)
+
         except (urllib.error.URLError, TimeoutError, OSError):
             return False
 
     def _cache_key(self, task: str, prompt: str, images: tuple[bytes, ...]) -> str:
+
         digest = hashlib.sha256()
+
         digest.update(task.encode())
+
         digest.update(prompt.encode())
+
         for image in images:
             digest.update(hashlib.sha256(image).digest())
+
         return digest.hexdigest()
 
     def _cached(self, key: str) -> dict[str, Any] | None:
+
         if self._cache_dir is None:
             return None
+
         path = self._cache_dir / f"{key}.json"
+
         if not path.exists():
             return None
+
         try:
             loaded: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+
             return loaded
+
         except (json.JSONDecodeError, OSError):
             return None
 
     def _store(self, key: str, value: dict[str, Any]) -> None:
+
         if self._cache_dir is None:
             return
+
         try:
             (self._cache_dir / f"{key}.json").write_text(json.dumps(value), encoding="utf-8")
+
         except OSError:
             log.debug("could not cache %s", key, exc_info=True)
 
@@ -172,27 +277,40 @@ class ProxyVisionModel:
         system: str = "",
     ) -> dict[str, Any]:
         """Send one message, falling back to another model on exhausted quota."""
+
         key = self._cache_key(task, prompt + system, images)
+
         cached = self._cached(key)
+
         if cached is not None:
             return cached
 
         candidates = [self._model, *(m for m in FALLBACK_MODELS if m != self._model)]
+
         for model in candidates:
             if model in self._exhausted:
                 continue
+
             result, exhausted = self._call_model(model, task, prompt, images, system)
+
             if exhausted:
                 self._exhausted.add(model)
+
                 log.warning("%s is out of quota; trying the next model", model)
+
                 continue
+
             if result:
                 # Cache under the original key so a later run reuses this regardless of
+
                 # which model happened to answer.
+
                 self._store(key, result)
+
             return result
 
         log.error("every model is out of quota")
+
         return {}
 
     def _call_model(
@@ -206,17 +324,19 @@ class ProxyVisionModel:
         """Returns (parsed, was_quota_exhausted)."""
 
         content: list[dict[str, Any]] = []
+
         for image in images:
             content.append(
                 {
                     "type": "image",
                     "source": {
                         "type": "base64",
-                        "media_type": "image/jpeg",
+                        "media_type": media_type(image),
                         "data": base64.b64encode(image).decode(),
                     },
                 }
             )
+
         content.append({"type": "text", "text": prompt})
 
         payload: dict[str, Any] = {
@@ -224,6 +344,7 @@ class ProxyVisionModel:
             "max_tokens": MAX_TOKENS,
             "messages": [{"role": "user", "content": content}],
         }
+
         if system:
             payload["system"] = system
 
@@ -241,59 +362,89 @@ class ProxyVisionModel:
         try:
             with urllib.request.urlopen(request, timeout=self._timeout) as response:
                 body = json.load(response)
+
         except urllib.error.HTTPError as exc:
             # The response body carries the actual reason -- quota, model name, payload
+
             # size. Reporting only the status code turns a diagnosable problem into a
+
             # guess, which cost real time here.
+
             try:
                 detail = exc.read().decode("utf-8", "replace")[:400]
+
             except Exception:
                 detail = "(no body)"
+
             if QUOTA_MARKER in detail:
                 return {}, True
+
             log.warning("proxy call %s failed: HTTP %s %s", task, exc.code, detail)
+
             return {}, False
+
         except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
             log.warning("proxy call %s failed: %s", task, exc)
+
             return {}, False
 
         # Anthropic returns a list of content blocks; concatenate the text ones.
+
         blocks = body.get("content") or []
+
         text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict))
+
         parsed = extract_json(text)
+
         stop = body.get("stop_reason")
+
         if stop == "max_tokens":
             # The outer JSON object is unclosed, so extract_json recovers only a nested
+
             # fragment. Caching that would bake a half-record into the corpus.
+
             log.warning("response for %s hit the token limit and was discarded", task)
+
             return {}, False
+
         parsed.setdefault("_raw", text[:2000])
+
         return parsed, False
 
     # -- VisionModel -------------------------------------------------------------
 
     def _analyze_all(self, image: bytes) -> dict[str, Any]:
+
         from fashion.adapters.prompts import ANALYSIS_PROMPT, ANALYSIS_SYSTEM
 
         return self.call("analyze_all", ANALYSIS_PROMPT, (image,), system=ANALYSIS_SYSTEM)
 
     def analyze_body(self, image: bytes) -> BodyMetrics:
+
         data = self._analyze_all(image).get("body", {}) or {}
 
         # Every width must be present and positive. Substituting a default for a missing
+
         # one silently invents a proportion: a response carrying shoulder=100 with no
+
         # waist became a shoulder/waist ratio of 100, which is not a body, and the
+
         # absurdity only surfaced later as a validation error deep in the pipeline.
+
         widths: dict[str, float] = {}
+
         for field in ("shoulder_width", "waist_width", "hip_width"):
             try:
                 value = float(data.get(field))  # type: ignore[arg-type]
+
             except (TypeError, ValueError):
                 value = 0.0
+
             if value <= 0:
                 raise UnusableAnalysisError(
                     f"{field} missing or non-positive in the model response"
                 )
+
             widths[field] = value
 
         proportions = Proportions(
@@ -301,22 +452,37 @@ class ProxyVisionModel:
             waist=widths["waist_width"],
             hip=widths["hip_width"],
         )
+
         # Widths measured off one image should sit within a narrow band of each other.
+
         # Anything wilder is a misread, not a rare body, and letting it through would
+
         # put a nonsense shape into the corpus.
+
         ratios = (
             proportions.shoulder / proportions.waist,
             proportions.waist / proportions.hip,
             proportions.shoulder / proportions.hip,
         )
+
         if any(r <= 0.2 or r >= 4.0 for r in ratios):
             raise UnusableAnalysisError(f"implausible width ratios {ratios}")
+
         confidence = confidence_from_ratios(proportions)
+
         full_body = bool(data.get("full_body_visible", False))
+
         if not full_body:
             confidence *= 0.5
+
+        try:
+            wardrobe = Wardrobe(str(data.get("wardrobe_suggestion", "unisex")))
+        except ValueError:
+            wardrobe = Wardrobe.UNISEX
+
         return BodyMetrics(
             full_body=full_body,
+            wardrobe=wardrobe,
             shape=classify(proportions),
             build=Build(str(data.get("build", Build.ATHLETIC.value))),
             height_band=HeightBand(str(data.get("height_band", HeightBand.AVERAGE.value))),
@@ -326,46 +492,62 @@ class ProxyVisionModel:
         )
 
     def tag_outfit(self, image: bytes) -> dict[str, object]:
+
         outfit: dict[str, object] = self._analyze_all(image).get("outfit", {}) or {}
+
         return outfit
 
     def caption_outfit(self, image: bytes) -> str:
+
         return str(self._analyze_all(image).get("caption", "")).strip()
 
     def find_gaps(self, generated: bytes, prompt: str) -> tuple[MissingConcept, ...]:
+
         from fashion.adapters.prompts import GAP_PROMPT
 
         data = self.call("find_gaps", GAP_PROMPT.format(request=prompt), (generated,))
+
         return _to_concepts(data)
 
     def find_missing_concepts(
         self, request: str, found: tuple[str, ...]
     ) -> tuple[MissingConcept, ...]:
+
         from fashion.adapters.prompts import MISSING_PROMPT
 
         listing = "\n".join(f"- {f}" for f in found) or "- (nothing retrieved)"
+
         data = self.call("find_missing", MISSING_PROMPT.format(request=request, listing=listing))
+
         return _to_concepts(data)
 
     def expand_query(self, text: str, n: int = 3) -> tuple[str, ...]:
+
         from fashion.adapters.prompts import EXPAND_PROMPT
 
         query = text.strip()
+
         if not query:
             return ()
+
         data = self.call("expand", EXPAND_PROMPT.format(n=n, query=query))
+
         variants = [
             str(q).strip()
             for q in (data.get("queries") or [])
             if str(q).strip() and str(q).strip().casefold() != query.casefold()
         ]
+
         return (query, *variants[:n])
 
     def write_rationale(self, outfit: OutfitItem, metrics: BodyMetrics) -> str:
+
         from fashion.core.crosscultural import adjustments, explain
 
         grounded = explain(outfit, metrics.shape)
+
         fixes = adjustments(outfit, metrics.shape)
+
         data = self.call(
             "rationale",
             "Rewrite this styling note as two warm, plain sentences for the wearer. "
@@ -373,19 +555,28 @@ class ProxyVisionModel:
             'Return JSON: {"text": "..."}\n\n'
             f"Note: {grounded}\nAdjustments: {'; '.join(fixes) or 'none'}",
         )
+
         return str(data.get("text", "")).strip() or grounded
 
 
 def _to_concepts(data: dict[str, Any]) -> tuple[MissingConcept, ...]:
+
     out: list[MissingConcept] = []
+
     for entry in data.get("missing", []) or []:
         if not isinstance(entry, dict):
             continue
+
         concept = str(entry.get("concept", "")).strip()
+
         caption = str(entry.get("retrieval_caption", "")).strip()
+
         if not concept or not caption:
             continue
+
         if len(caption) < len(concept):
             caption = f"{concept}: {caption}"
+
         out.append(MissingConcept(concept=concept, retrieval_caption=caption))
+
     return tuple(out)

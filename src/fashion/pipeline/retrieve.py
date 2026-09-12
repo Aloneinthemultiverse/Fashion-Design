@@ -31,6 +31,7 @@ from fashion.core.models import (
     OutfitItem,
     Recommendation,
     UserQuery,
+    Wardrobe,
     as_str_tuple,
 )
 from fashion.core.ranking import reciprocal_rank_fusion
@@ -84,6 +85,18 @@ class Retriever:
 
     def _filter_for(self, metrics: BodyMetrics, query: UserQuery, *, strict: bool) -> Filter:
         must: dict[str, str] = {}
+        any_of: dict[str, tuple[str, ...]] = {}
+
+        # Wardrobe is a hard constraint and survives every relaxation. Menswear and
+        # womenswear are largely disjoint garment sets, so crossing them returns clothes
+        # the user cannot wear, which is a worse answer than none at all. Unisex items
+        # stay eligible either way -- that is what the category is for.
+        wardrobe = query.wardrobe or (
+            metrics.wardrobe if metrics.wardrobe is not Wardrobe.UNISEX else None
+        )
+        if wardrobe is not None:
+            any_of["wardrobe"] = (wardrobe.value, Wardrobe.UNISEX.value)
+
         if strict:
             must["body_shape"] = metrics.shape.value
         if query.region:
@@ -97,7 +110,7 @@ class Retriever:
             must["occasion"] = query.occasion.value
         if query.celebrity_name:
             must["celebrity_name"] = query.celebrity_name
-        return Filter(must_equal=must)
+        return Filter(must_equal=must, must_be_in=any_of)
 
     def _search_channels(
         self, metrics: BodyMetrics, query: UserQuery, photo: bytes | None, where: Filter

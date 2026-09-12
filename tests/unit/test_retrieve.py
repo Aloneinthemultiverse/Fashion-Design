@@ -308,3 +308,105 @@ def test_region_survives_the_body_shape_relaxation(tmp_path) -> None:  # type: i
     assert result.relaxed
     assert result.recommendations
     assert all(r.outfit.celebrity_id == "c-indian" for r in result.recommendations)
+
+
+def _wardrobe_corpus(tmp_path):  # type: ignore[no-untyped-def]
+    """Same shape and region throughout, so only wardrobe can explain a difference."""
+    from fashion.core.models import Wardrobe
+
+    embedder = FakeEmbedder()
+    store = InMemoryVectorStore()
+    items, profiles = [], {}
+    for wardrobe in Wardrobe:
+        image = tmp_path / f"{wardrobe.value}.jpg"
+        image.write_bytes(f"outfit-{wardrobe.value}".encode())
+        items.append(
+            make_outfit(f"o-{wardrobe.value}", celebrity_id=f"c-{wardrobe.value}").model_copy(
+                update={"image_path": str(image), "wardrobe": wardrobe}
+            )
+        )
+        profiles[f"c-{wardrobe.value}"] = CelebrityProfile(
+            id=f"c-{wardrobe.value}",
+            name=f"Celeb {wardrobe.value}",
+            region="indian",
+            shape=BodyShape.PEAR,
+            build=Build.SLIM,
+            height_band=HeightBand.AVERAGE,
+        )
+    IndexBuilder(embedder, store).build(items, profiles)
+    return embedder, store
+
+
+def test_womenswear_is_never_returned_for_a_menswear_request(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """A saree returned to someone wanting menswear is a garment they cannot wear.
+
+    This is the failure that produced a generated image of a woman for a male user.
+    """
+    from fashion.core.models import Wardrobe
+
+    embedder, store = _wardrobe_corpus(tmp_path)
+    result = Retriever(embedder, store).retrieve(
+        metrics(BodyShape.PEAR), UserQuery(text="an outfit", wardrobe=Wardrobe.MENSWEAR)
+    )
+    returned = {r.outfit.wardrobe for r in result.recommendations}
+    assert Wardrobe.WOMENSWEAR not in returned
+    assert returned <= {Wardrobe.MENSWEAR, Wardrobe.UNISEX}
+
+
+def test_unisex_stays_eligible_for_either_wardrobe(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """That is the whole point of the category; excluding it would gut the corpus."""
+    from fashion.core.models import Wardrobe
+
+    embedder, store = _wardrobe_corpus(tmp_path)
+    for wanted in (Wardrobe.MENSWEAR, Wardrobe.WOMENSWEAR):
+        result = Retriever(embedder, store).retrieve(
+            metrics(BodyShape.PEAR), UserQuery(text="an outfit", wardrobe=wanted)
+        )
+        assert Wardrobe.UNISEX in {r.outfit.wardrobe for r in result.recommendations}
+
+
+def test_wardrobe_survives_the_body_shape_relaxation(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Relaxing shape must not quietly hand back clothes from the other tradition."""
+    from fashion.core.models import Wardrobe
+
+    embedder, store = _wardrobe_corpus(tmp_path)
+    result = Retriever(embedder, store).retrieve(
+        metrics(BodyShape.HOURGLASS),  # no hourglass wearers exist here
+        UserQuery(text="an outfit", wardrobe=Wardrobe.MENSWEAR),
+    )
+    assert result.relaxed
+    assert Wardrobe.WOMENSWEAR not in {r.outfit.wardrobe for r in result.recommendations}
+
+
+def test_the_photo_suggests_a_wardrobe_when_the_user_states_none(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """The reading is a default, not a verdict -- but it must actually be applied."""
+    from fashion.core.models import BodyMetrics, Wardrobe
+
+    embedder, store = _wardrobe_corpus(tmp_path)
+    inferred = BodyMetrics(
+        shape=BodyShape.PEAR,
+        build=Build.SLIM,
+        height_band=HeightBand.AVERAGE,
+        wardrobe=Wardrobe.MENSWEAR,
+        user_confirmed=True,
+    )
+    result = Retriever(embedder, store).retrieve(inferred, UserQuery(text="an outfit"))
+    assert Wardrobe.WOMENSWEAR not in {r.outfit.wardrobe for r in result.recommendations}
+
+
+def test_an_explicit_choice_overrides_the_photo(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """The user's stated preference outranks anything inferred from their picture."""
+    from fashion.core.models import BodyMetrics, Wardrobe
+
+    embedder, store = _wardrobe_corpus(tmp_path)
+    inferred = BodyMetrics(
+        shape=BodyShape.PEAR,
+        build=Build.SLIM,
+        height_band=HeightBand.AVERAGE,
+        wardrobe=Wardrobe.MENSWEAR,
+        user_confirmed=True,
+    )
+    result = Retriever(embedder, store).retrieve(
+        inferred, UserQuery(text="an outfit", wardrobe=Wardrobe.WOMENSWEAR)
+    )
+    assert Wardrobe.MENSWEAR not in {r.outfit.wardrobe for r in result.recommendations}

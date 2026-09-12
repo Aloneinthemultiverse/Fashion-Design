@@ -33,6 +33,25 @@ class HeightBand(StrEnum):
     TALL = "tall"
 
 
+class Wardrobe(StrEnum):
+    """Which garment tradition an item belongs to.
+
+    Deliberately a property of the *clothing*, not a claim about the person wearing it.
+    A saree is womenswear and a sherwani is menswear as facts about the garments; what a
+    given user wants from that is their choice, defaulted from their photo and
+    correctable. Modelling it the other way round would have the system asserting
+    someone's gender, which it has no business doing and no reliable way to do.
+
+    Without this the system is simply broken: menswear and womenswear are largely
+    disjoint garment sets, so matching across them produces recommendations that cannot
+    be worn and generated images of the wrong person entirely.
+    """
+
+    MENSWEAR = "menswear"
+    WOMENSWEAR = "womenswear"
+    UNISEX = "unisex"
+
+
 class Culture(StrEnum):
     ETHNIC = "ethnic"
     WESTERN = "western"
@@ -89,6 +108,9 @@ class BodyMetrics(Frozen):
     shape: BodyShape
     build: Build
     height_band: HeightBand
+    # Suggested from the photo, and only a suggestion -- the user chooses which wardrobe
+    # they want and can override it.
+    wardrobe: Wardrobe = Wardrobe.UNISEX
     shoulder_waist_ratio: float | None = Field(default=None, gt=0, lt=5)
     waist_hip_ratio: float | None = Field(default=None, gt=0, lt=5)
     confidence: float = Field(ge=0.0, le=1.0, default=0.5)
@@ -143,6 +165,7 @@ class OutfitItem(Frozen):
     waist_emphasis: WaistEmphasis
     culture: Culture
     occasion: Occasion
+    wardrobe: Wardrobe = Wardrobe.UNISEX
     colors: tuple[str, ...] = ()
     patterns: tuple[str, ...] = ()
     fabric: str | None = None
@@ -166,6 +189,9 @@ class UserQuery(Frozen):
     # any region. Kept optional rather than defaulted here so the retrieval engine
     # stays general and the product decision lives at the edge, where it is visible.
     region: str | None = None
+    # Which garment tradition to search. None means any, which is almost never what a
+    # user wants: it mixes sarees into menswear results.
+    wardrobe: Wardrobe | None = None
     # A Western celebrity whose proportions stand in for the user's own -- the problem
     # statement's primary input. Distinct from `celebrity_name`, which narrows whose
     # wardrobe is searched; this one says whose *body* to match.

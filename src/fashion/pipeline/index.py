@@ -50,6 +50,7 @@ def build_payload(item: OutfitItem, profile: CelebrityProfile) -> dict[str, obje
         "neckline": item.neckline.value,
         "waist_emphasis": item.waist_emphasis.value,
         "culture": item.culture.value,
+        "wardrobe": item.wardrobe.value,
         "occasion": item.occasion.value,
         "colors": list(item.colors),
         "patterns": list(item.patterns),

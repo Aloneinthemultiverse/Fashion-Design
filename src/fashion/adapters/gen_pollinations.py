@@ -33,8 +33,17 @@ WIDTH, HEIGHT = 768, 1024  # Portrait: full-body outfit shots are taller than wi
 
 # Steers away from the failure modes that make generated fashion images unusable.
 STYLE_SUFFIX = (
-    "full body fashion photograph, single person, complete outfit visible, "
-    "studio lighting, sharp focus, plain background"
+    "full body fashion photograph, single person, fully clothed, "
+    "complete outfit clearly visible from shoulders to feet, "
+    "modern ready-to-wear clothing, studio lighting, sharp focus, plain background"
+)
+
+# Appended as a negative instruction. Without it an abstract brief like "indo-western
+# festive" reliably produces a bare-chested figure in mythological drapery rather than
+# clothes anyone could buy or wear.
+AVOID = (
+    "not shirtless, not bare-chested, no mythological or costume dress, "
+    "no fantasy armour, no body paint"
 )
 
 
@@ -85,7 +94,7 @@ class PollinationsGenerationProvider:
                 len(references),
             )
 
-        full_prompt = f"{prompt.strip()}, {STYLE_SUFFIX}"
+        full_prompt = f"{prompt.strip()}, {STYLE_SUFFIX}, {AVOID}"
         params = {
             "width": str(self._width),
             "height": str(self._height),

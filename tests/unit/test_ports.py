@@ -70,3 +70,20 @@ def test_missing_concepts_carry_a_denser_caption_than_the_concept() -> None:
     assert gaps, "fixture must actually produce a gap, or this test asserts nothing"
     for gap in gaps:
         assert len(gap.retrieval_caption) > len(gap.concept)
+
+
+def test_media_type_is_detected_from_content() -> None:
+    """Declaring the wrong media type is rejected outright by the API.
+
+    Hardcoding image/jpeg worked only because the seed corpus happens to be JPEG, and
+    failed on the first PNG a user uploaded -- the input that matters most.
+    """
+    from fashion.adapters.vision_proxy import media_type
+
+    assert media_type(b"\x89PNG\r\n\x1a\n" + b"x" * 32) == "image/png"
+    assert media_type(b"\xff\xd8\xff\xe0" + b"x" * 32) == "image/jpeg"
+    assert media_type(b"RIFF" + b"\x00" * 4 + b"WEBP" + b"x" * 32) == "image/webp"
+    assert media_type(b"GIF89a" + b"x" * 32) == "image/gif"
+    # Unknown content falls back rather than raising: a wrong guess is recoverable,
+    # a crash in the upload path is not.
+    assert media_type(b"not an image") == "image/jpeg"

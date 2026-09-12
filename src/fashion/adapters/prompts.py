@@ -48,6 +48,7 @@ Analyse this photograph and return exactly this JSON object:
     "torso_length": <number>,
     "build": "slim" | "athletic" | "curvy" | "muscular",
     "height_band": "petite" | "average" | "tall",
+    "wardrobe_suggestion": "menswear" | "womenswear" | "unisex",
     "full_body_visible": true | false
   },
   "outfit": {
@@ -57,6 +58,7 @@ Analyse this photograph and return exactly this JSON object:
     "neckline": "v_neck" | "round" | "boat" | "sweetheart" | "halter" | "collared" | "off_shoulder",
     "waist_emphasis": "high" | "natural" | "dropped" | "none",
     "culture": "ethnic" | "western" | "fusion",
+    "wardrobe": "menswear" | "womenswear" | "unisex",
     "occasion": "casual" | "formal" | "party" | "wedding" | "festive",
     "colors": ["<colour>", ...],
     "patterns": ["<pattern>", ...],
@@ -73,12 +75,18 @@ Measurement guidance:
 - waist_width: narrowest point of the torso.
 - hip_width: widest point across the hips.
 - torso_length: shoulder line down to the hip line.
+- wardrobe_suggestion: which wardrobe the clothing they are already wearing comes from.
+  This is a starting point the user can change, not a judgement about them.
 - Use one consistent arbitrary unit for all four. Only their ratios are used, so the
   scale does not matter, but they must be measured against each other in this image.
 
 Field guidance:
 - garment_type: the specific name where one exists -- saree, lehenga, anarkali, sharara,
   churidar, kurta, gown, blazer, sherwani -- never a generic word like "outfit".
+- wardrobe: which garment tradition the clothing belongs to. A sherwani, kurta-pyjama
+  or bandhgala is menswear; a saree, lehenga or anarkali is womenswear; a shirt, tee,
+  blazer or jeans is unisex unless clearly cut for one. Judge the *garment*, not the
+  wearer -- if the item is genuinely worn by anyone, say unisex.
 - culture: "ethnic" for Indian traditional wear, "western" for Western garments,
   "fusion" for deliberate indo-western blends such as a crop top with a lehenga skirt,
   a saree worn with a shirt, or a dhoti paired with a jacket.

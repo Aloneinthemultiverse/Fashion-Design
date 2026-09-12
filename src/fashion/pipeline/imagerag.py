@@ -33,6 +33,7 @@ from fashion.core.models import (
     OutfitItem,
     Recommendation,
     UserQuery,
+    Wardrobe,
 )
 from fashion.pipeline.retrieve import _outfit_from_payload
 from fashion.ports.embedder import Embedder
@@ -190,7 +191,32 @@ class ImageRagGenerator:
         from fashion.core.crosscultural import GUIDANCE
 
         goal = GUIDANCE[metrics.shape].goal
-        parts = [query.text.strip() or "an outfit"]
+
+        # Name the wearer first. Without it the generator picks one, and it picked a
+        # woman for a male user -- the single most visibly wrong output this system has
+        # produced.
+        wardrobe = query.wardrobe or metrics.wardrobe
+        subject = {
+            Wardrobe.MENSWEAR: "a man wearing",
+            Wardrobe.WOMENSWEAR: "a woman wearing",
+        }.get(wardrobe, "a person wearing")
+
+        # Name concrete garments for the wardrobe. An abstract brief leaves the
+        # generator to invent one, and what it invents is costume rather than clothing.
+        anchor = {
+            Wardrobe.MENSWEAR: (
+                "such as a bandhgala jacket over straight trousers, a nehru-collar "
+                "kurta with tailored trousers, or an embroidered sherwani"
+            ),
+            Wardrobe.WOMENSWEAR: (
+                "such as a cape lehenga, a draped saree gown, or an anarkali with "
+                "a contemporary cut"
+            ),
+        }.get(wardrobe, "")
+
+        parts = [f"{subject} {query.text.strip() or 'an outfit'}"]
+        if anchor:
+            parts.append(anchor)
         if query.culture:
             parts.append(f"{query.culture.value} style")
         if query.occasion:
