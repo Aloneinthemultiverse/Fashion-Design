@@ -80,6 +80,14 @@ def extract_json(text: str) -> dict[str, Any]:
     return {}
 
 
+class UnusableAnalysisError(ValueError):
+    """The model returned measurements that cannot describe a body.
+
+    Distinct from a transport failure: the call succeeded and the answer is unusable, so
+    the caller should skip this image rather than retry it.
+    """
+
+
 class ProxyVisionModel:
     """VisionModel backed by an Anthropic-compatible local proxy."""
 
@@ -214,11 +222,38 @@ class ProxyVisionModel:
 
     def analyze_body(self, image: bytes) -> BodyMetrics:
         data = self._analyze_all(image).get("body", {}) or {}
+
+        # Every width must be present and positive. Substituting a default for a missing
+        # one silently invents a proportion: a response carrying shoulder=100 with no
+        # waist became a shoulder/waist ratio of 100, which is not a body, and the
+        # absurdity only surfaced later as a validation error deep in the pipeline.
+        widths: dict[str, float] = {}
+        for field in ("shoulder_width", "waist_width", "hip_width"):
+            try:
+                value = float(data.get(field))  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                value = 0.0
+            if value <= 0:
+                raise UnusableAnalysisError(
+                    f"{field} missing or non-positive in the model response"
+                )
+            widths[field] = value
+
         proportions = Proportions(
-            shoulder=float(data.get("shoulder_width") or 1.0),
-            waist=float(data.get("waist_width") or 1.0),
-            hip=float(data.get("hip_width") or 1.0),
+            shoulder=widths["shoulder_width"],
+            waist=widths["waist_width"],
+            hip=widths["hip_width"],
         )
+        # Widths measured off one image should sit within a narrow band of each other.
+        # Anything wilder is a misread, not a rare body, and letting it through would
+        # put a nonsense shape into the corpus.
+        ratios = (
+            proportions.shoulder / proportions.waist,
+            proportions.waist / proportions.hip,
+            proportions.shoulder / proportions.hip,
+        )
+        if any(r <= 0.2 or r >= 4.0 for r in ratios):
+            raise UnusableAnalysisError(f"implausible width ratios {ratios}")
         confidence = confidence_from_ratios(proportions)
         if not data.get("full_body_visible", True):
             confidence *= 0.5
