@@ -5,8 +5,21 @@ proportions from a photo; it is inconsistent at *naming* the resulting shape. Sp
 the two means the naming step is testable, auditable and identical for every user.
 
 Thresholds follow conventional styling practice:
-  shoulder/hip within ~5%  -> balanced top and bottom
+  shoulder/hip within ~8%  -> balanced top and bottom
   waist at least ~25% smaller than the larger of shoulder/hip -> defined waist
+
+The 8% balance tolerance is empirical, not the ~5% that styling guides quote. Those
+figures assume a tape measure; these widths are read off a photograph, where the
+shoulder line often includes the upper arm and the hip is frequently softened by
+clothing. Measured over the full-body analyses in this corpus, the shoulder/hip
+deviation has a lower quartile of 5.6% and a median of 10.5% -- so a 5% threshold
+declares three quarters of people shoulder-dominant and collapses almost everything into
+inverted_triangle. 8% sits just above that lower quartile and is the value at which all
+five shapes actually appear.
+
+That sample is small (18 measurements), so this is a provisional figure. It should be
+revisited once the corpus has a few hundred full-body analyses -- `scripts/reclassify.py`
+recomputes every profile from cached measurements, so re-tuning costs no model calls.
 """
 
 from __future__ import annotations
@@ -15,7 +28,7 @@ from dataclasses import dataclass
 
 from fashion.core.models import BodyShape
 
-BALANCED_TOLERANCE = 0.05
+BALANCED_TOLERANCE = 0.08
 DEFINED_WAIST_RATIO = 0.75
 
 
