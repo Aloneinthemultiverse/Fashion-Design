@@ -40,6 +40,7 @@ import logging
 import sys
 from pathlib import Path
 
+from fashion.adapters.source_imginn import ImginnImageSource
 from fashion.adapters.source_instagram import (
     InstagramImageSource,
     SessionRequiredError,
@@ -141,6 +142,12 @@ def main() -> int:
     parser.add_argument("--limit-celebrities", type=int, default=10)
     parser.add_argument("--posts-per-celebrity", type=int, default=5)
     parser.add_argument("--vision", choices=["fake", "proxy"], default="proxy")
+    parser.add_argument(
+        "--source",
+        choices=["mirror", "instaloader"],
+        default="mirror",
+        help="mirror needs no login; instaloader needs your own Instagram session",
+    )
     parser.add_argument("--dry-run", action="store_true", help="list targets only")
     args = parser.parse_args()
 
@@ -160,9 +167,12 @@ def main() -> int:
         limit=args.limit_celebrities,
     )
     if not targets:
+        overlap = sum(1 for qid in profiles if qid in handles)
         raise SystemExit(
-            "no celebrities matched with a known Instagram handle. "
-            f"{len(handles)} of {len(profiles)} profiles have one."
+            "no celebrities matched. Of the "
+            f"{len(profiles)} labelled celebrities, {overlap} have an Instagram handle "
+            f"({len(handles)} handles exist in the roster, but most of those people are "
+            "not labelled yet)."
         )
 
     with_handles = sum(1 for qid in profiles if qid in handles)
@@ -176,15 +186,20 @@ def main() -> int:
         print("\ndry run: nothing was requested from Instagram")
         return 0
 
-    try:
-        source = InstagramImageSource(
-            args.data_dir / "instagram",
-            i_accept_terms_risk=True,
-            session_file=args.session_file,
-            recent_days=30,
-        )
-    except SessionRequiredError as exc:
-        raise SystemExit(f"\n{exc}") from exc
+    source: ImginnImageSource | InstagramImageSource
+    if args.source == "mirror":
+        # Default: a public mirror, which needs no account and puts none at risk.
+        source = ImginnImageSource(args.data_dir / "instagram")
+    else:
+        try:
+            source = InstagramImageSource(
+                args.data_dir / "instagram",
+                i_accept_terms_risk=True,
+                session_file=args.session_file,
+                recent_days=30,
+            )
+        except SessionRequiredError as exc:
+            raise SystemExit(f"\n{exc}") from exc
 
     vision = build_vision(args.vision)
     outfits = OutfitRepository(args.data_dir / "labels.jsonl")
@@ -207,6 +222,13 @@ def main() -> int:
             except Exception:
                 log.warning("analysis failed for %s", shortcode, exc_info=True)
                 failed += 1
+                continue
+
+            if not tags or not tags.get("garment_type"):
+                # Analysis returned nothing usable. Writing the record anyway would put
+                # an outfit with null attributes into the corpus, where it is invisible
+                # to every filter and pollutes retrieval silently.
+                skipped += 1
                 continue
 
             if tags.get("outfit_clearly_visible") is False:

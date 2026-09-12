@@ -16,3 +16,8 @@ data/seed/images/
 data/cache/
 qdrant_storage/
 data/generated/
+
+# Instagram session material — treat as credentials, never commit
+ig_sessionid.txt
+ig.session
+data/seed/instagram/

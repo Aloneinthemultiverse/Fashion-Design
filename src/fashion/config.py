@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
     proxy_url: str = "http://localhost:8080"
-    proxy_model: str = "gemini-3.6-flash-high"
+    proxy_model: str = "claude-sonnet-4-6"
 
     embed_provider: Literal["fake", "openclip"] = "fake"
     clip_model: str = "ViT-B-32"

@@ -41,7 +41,23 @@ from fashion.core.models import (
 log = logging.getLogger(__name__)
 
 DEFAULT_URL = "http://localhost:8080"
-DEFAULT_MODEL = "gemini-3.6-flash-high"
+DEFAULT_MODEL = "claude-sonnet-4-6"
+
+# Tried in order when the configured model reports exhausted quota. Free-tier capacity
+# runs out routinely -- gemini-3 quota vanished mid-labelling-run here, with a 166-hour
+# reset -- and a multi-hour pass that dies on the first RESOURCE_EXHAUSTED wastes
+# everything after it. Families are interleaved deliberately: they meter separately, so
+# the next family is the one likely to still have capacity.
+FALLBACK_MODELS = (
+    "claude-sonnet-4-6",
+    "gemini-3.6-flash-high",
+    "gemini-3.5-flash-lite",
+    "claude-opus-4-6-thinking",
+)
+
+# Substring identifying a quota refusal in the proxy's error body, as opposed to a
+# malformed request, which retrying on another model would not fix.
+QUOTA_MARKER = "RESOURCE_EXHAUSTED"
 DEFAULT_TIMEOUT = 180.0
 MAX_TOKENS = 4096
 
@@ -101,6 +117,9 @@ class ProxyVisionModel:
     ) -> None:
         self._url = base_url.rstrip("/")
         self._model = model
+        # Models found exhausted this run, so the next call does not re-pay the timeout
+        # discovering the same thing.
+        self._exhausted: set[str] = set()
         self._timeout = timeout
         self._cache_dir = cache_dir
         if cache_dir is not None:
@@ -119,7 +138,6 @@ class ProxyVisionModel:
     def _cache_key(self, task: str, prompt: str, images: tuple[bytes, ...]) -> str:
         digest = hashlib.sha256()
         digest.update(task.encode())
-        digest.update(self._model.encode())
         digest.update(prompt.encode())
         for image in images:
             digest.update(hashlib.sha256(image).digest())
@@ -153,11 +171,39 @@ class ProxyVisionModel:
         *,
         system: str = "",
     ) -> dict[str, Any]:
-        """Send one message and return the parsed JSON body."""
+        """Send one message, falling back to another model on exhausted quota."""
         key = self._cache_key(task, prompt + system, images)
         cached = self._cached(key)
         if cached is not None:
             return cached
+
+        candidates = [self._model, *(m for m in FALLBACK_MODELS if m != self._model)]
+        for model in candidates:
+            if model in self._exhausted:
+                continue
+            result, exhausted = self._call_model(model, task, prompt, images, system)
+            if exhausted:
+                self._exhausted.add(model)
+                log.warning("%s is out of quota; trying the next model", model)
+                continue
+            if result:
+                # Cache under the original key so a later run reuses this regardless of
+                # which model happened to answer.
+                self._store(key, result)
+            return result
+
+        log.error("every model is out of quota")
+        return {}
+
+    def _call_model(
+        self,
+        model: str,
+        task: str,
+        prompt: str,
+        images: tuple[bytes, ...],
+        system: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """Returns (parsed, was_quota_exhausted)."""
 
         content: list[dict[str, Any]] = []
         for image in images:
@@ -174,7 +220,7 @@ class ProxyVisionModel:
         content.append({"type": "text", "text": prompt})
 
         payload: dict[str, Any] = {
-            "model": self._model,
+            "model": model,
             "max_tokens": MAX_TOKENS,
             "messages": [{"role": "user", "content": content}],
         }
@@ -195,9 +241,21 @@ class ProxyVisionModel:
         try:
             with urllib.request.urlopen(request, timeout=self._timeout) as response:
                 body = json.load(response)
+        except urllib.error.HTTPError as exc:
+            # The response body carries the actual reason -- quota, model name, payload
+            # size. Reporting only the status code turns a diagnosable problem into a
+            # guess, which cost real time here.
+            try:
+                detail = exc.read().decode("utf-8", "replace")[:400]
+            except Exception:
+                detail = "(no body)"
+            if QUOTA_MARKER in detail:
+                return {}, True
+            log.warning("proxy call %s failed: HTTP %s %s", task, exc.code, detail)
+            return {}, False
         except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
             log.warning("proxy call %s failed: %s", task, exc)
-            return {}
+            return {}, False
 
         # Anthropic returns a list of content blocks; concatenate the text ones.
         blocks = body.get("content") or []
@@ -208,10 +266,9 @@ class ProxyVisionModel:
             # The outer JSON object is unclosed, so extract_json recovers only a nested
             # fragment. Caching that would bake a half-record into the corpus.
             log.warning("response for %s hit the token limit and was discarded", task)
-            return {}
+            return {}, False
         parsed.setdefault("_raw", text[:2000])
-        self._store(key, parsed)
-        return parsed
+        return parsed, False
 
     # -- VisionModel -------------------------------------------------------------
 
