@@ -29,8 +29,16 @@ from dataclasses import dataclass, field
 log = logging.getLogger(__name__)
 
 HEALTH_CACHE_SECONDS = 30.0
-DEFAULT_TIMEOUT = 300.0  # SDXL on a free T4 takes 30-90s; try-on can take longer.
 PROBE_TIMEOUT = 5.0
+
+# A free Cloudflare Quick Tunnel terminates any single request that runs past roughly
+# 100 seconds, and SDXL on a T4 takes longer. Doing the work inside the request returns
+# HTTP 524 while the worker is perfectly healthy, which is exactly what happened. So the
+# worker submits and this polls: each individual request finishes in milliseconds and
+# only the polling loop is long.
+SUBMIT_TIMEOUT = 30.0
+POLL_INTERVAL = 4.0
+POLL_TIMEOUT = 420.0
 
 
 @dataclass
@@ -38,7 +46,7 @@ class ColabWorkerClient:
     """Shared transport for the generation and try-on providers."""
 
     base_url: str
-    timeout: float = DEFAULT_TIMEOUT
+    timeout: float = SUBMIT_TIMEOUT
     _healthy_until: float = field(default=0.0, init=False)
     _healthy: bool = field(default=False, init=False)
 
@@ -64,6 +72,25 @@ class ColabWorkerClient:
             log.info("colab worker at %s is not reachable", self.base_url)
             return False
 
+    def get(self, path: str) -> dict[str, object] | None:
+        request = urllib.request.Request(f"{self.base_url}{path}")
+        try:
+            with urllib.request.urlopen(request, timeout=SUBMIT_TIMEOUT) as response:
+                parsed: dict[str, object] = json.load(response)
+                return parsed
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+            return None
+
+    def submit(self, path: str, payload: dict[str, object]) -> bytes | None:
+        """Submit a job and wait for its result."""
+        accepted = self.post(path, payload)
+        job_id = str((accepted or {}).get("job_id", ""))
+        if not job_id:
+            # An older worker that still answers inline. Accept its image so a
+            # not-yet-updated notebook keeps working.
+            return _decode(accepted)
+        return _poll(self, job_id)
+
     def post(self, path: str, payload: dict[str, object]) -> dict[str, object] | None:
         body = json.dumps(payload).encode()
         request = urllib.request.Request(
@@ -83,6 +110,28 @@ class ColabWorkerClient:
             return None
 
 
+def _poll(client: ColabWorkerClient, job_id: str) -> bytes | None:
+    """Wait for a submitted job, returning its image.
+
+    Returns None on failure or timeout rather than raising: an unavailable backend is a
+    normal outcome here and callers already degrade gracefully.
+    """
+    deadline = time.monotonic() + POLL_TIMEOUT
+    while time.monotonic() < deadline:
+        time.sleep(POLL_INTERVAL)
+        result = client.get(f"/result/{job_id}")
+        if result is None:
+            continue
+        state = str(result.get("state", ""))
+        if state == "done":
+            return _decode(result)
+        if state == "failed":
+            log.warning("colab job failed: %s", str(result.get("error"))[:200])
+            return None
+    log.warning("colab job %s did not finish within %.0fs", job_id, POLL_TIMEOUT)
+    return None
+
+
 def _decode(payload: dict[str, object] | None, key: str = "image") -> bytes | None:
     if payload is None:
         return None
@@ -99,7 +148,7 @@ def _decode(payload: dict[str, object] | None, key: str = "image") -> bytes | No
 class ColabGenerationProvider:
     """SDXL with IP-Adapter image conditioning, running on the Colab worker."""
 
-    def __init__(self, base_url: str, *, timeout: float = DEFAULT_TIMEOUT) -> None:
+    def __init__(self, base_url: str, *, timeout: float = SUBMIT_TIMEOUT) -> None:
         self._client = ColabWorkerClient(base_url, timeout=timeout)
 
     @property
@@ -128,13 +177,13 @@ class ColabGenerationProvider:
         }
         if seed is not None:
             payload["seed"] = seed
-        return _decode(self._client.post("/generate", payload))
+        return self._client.submit("/generate", payload)
 
 
 class ColabTryOnProvider:
     """IDM-VTON try-on, running on the Colab worker."""
 
-    def __init__(self, base_url: str, *, timeout: float = DEFAULT_TIMEOUT) -> None:
+    def __init__(self, base_url: str, *, timeout: float = SUBMIT_TIMEOUT) -> None:
         self._client = ColabWorkerClient(base_url, timeout=timeout)
 
     @property
@@ -144,12 +193,10 @@ class ColabTryOnProvider:
     def try_on(self, person: bytes, garment: bytes) -> bytes | None:
         if not self.available:
             return None
-        return _decode(
-            self._client.post(
-                "/tryon",
-                {
-                    "person": base64.b64encode(person).decode(),
-                    "garment": base64.b64encode(garment).decode(),
-                },
-            )
+        return self._client.submit(
+            "/tryon",
+            {
+                "person": base64.b64encode(person).decode(),
+                "garment": base64.b64encode(garment).decode(),
+            },
         )
