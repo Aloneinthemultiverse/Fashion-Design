@@ -119,7 +119,15 @@ class ImageRagGenerator:
         metrics: BodyMetrics,
         *,
         prompt: str | None = None,
+        seed_references: tuple[tuple[str, bytes], ...] = (),
     ) -> ImageRagResult:
+        """Generate, then close the gaps the VLM finds with retrieved references.
+
+        `seed_references` are the (id, image) pairs of the outfits already retrieved
+        for this user -- celebrities who share their body shape. When the backend can
+        condition on images they guide the first pass too, so the generated outfit
+        descends from the recommendation instead of starting from text alone.
+        """
         if not self.generator.available:
             # Not an error: the null provider is the default, and callers fall back to
             # showing retrieved reference outfits instead of a generated one.
@@ -141,15 +149,27 @@ class ImageRagGenerator:
                     ("culture", query.culture.value if query.culture else ""),
                 )
                 if value
-            }
+            },
+            # Without this a menswear request can be conditioned on a saree.
+            must_be_in=(
+                {"wardrobe": (wardrobe.value, Wardrobe.UNISEX.value)}
+                if (wardrobe := query.wardrobe or metrics.wardrobe) is not Wardrobe.UNISEX
+                else {}
+            ),
         )
 
-        image = self.generator.generate(text)
+        seeded = seed_references if self.generator.supports_references else ()
+        for outfit_id, _ in seeded:
+            self._seen.add(outfit_id)
+        if seeded:
+            image = self.generator.generate(text, references=tuple(img for _, img in seeded))
+        else:
+            image = self.generator.generate(text)
         if image is None:
             return ImageRagResult(image=None, unavailable_reason="Initial generation failed.")
 
         rounds: list[Round] = []
-        all_references: list[str] = []
+        all_references: list[str] = [outfit_id for outfit_id, _ in seeded]
 
         for index in range(self.max_iterations):
             gaps = self.vision.find_gaps(image, text)

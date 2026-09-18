@@ -387,3 +387,24 @@ def test_the_loop_stops_when_no_new_gaps_appear(tmp_path: Path) -> None:
         "a lehenga with a dupatta", metrics(), []
     )
     assert result.rounds <= 2
+
+
+def test_seed_references_condition_the_first_pass(store: InMemoryVectorStore) -> None:
+    """The retrieved celebrity outfits guide generation from the start."""
+    generator = RecordingGenerator()
+    vision = GapThenClean()
+    result = ImageRagGenerator(vision, FakeEmbedder(), store, generator).generate(  # type: ignore[arg-type]
+        UserQuery(text="a nehru jacket"),
+        metrics(),
+        seed_references=(("seed1", b"seed-image"), ("seed2", b"seed-image-2")),
+    )
+    assert generator.calls[0][1] == 2
+    assert result.references[:2] == ("seed1", "seed2")
+
+
+def test_seed_references_are_dropped_when_unsupported(store: InMemoryVectorStore) -> None:
+    generator = RecordingGenerator(supports_references=False)
+    ImageRagGenerator(FakeVisionModel(), FakeEmbedder(), store, generator).generate(
+        UserQuery(text="a nehru jacket"), metrics(), seed_references=(("seed1", b"x"),)
+    )
+    assert generator.calls[0][1] == 0

@@ -11,6 +11,7 @@ store would make a misconfigured deployment look like an empty corpus. That fail
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from fashion.adapters.embed_fake import FakeEmbedder
 from fashion.adapters.gen_null import NullGenerationProvider, NullTryOnProvider
@@ -22,6 +23,9 @@ from fashion.ports.generation import GenerationProvider
 from fashion.ports.tryon import TryOnProvider
 from fashion.ports.vectorstore import VectorStore
 from fashion.ports.vision import VisionModel
+
+if TYPE_CHECKING:
+    from fashion.adapters.edit_pollinations import PollinationsEditClient
 
 log = logging.getLogger(__name__)
 
@@ -115,6 +119,17 @@ def build_generation(settings: Settings | None = None) -> GenerationProvider:
         from fashion.adapters.gen_pollinations import PollinationsGenerationProvider
 
         return PollinationsGenerationProvider()
+    if settings.generation_provider == "pollinations" and settings.pollinations_token:
+        # Reference-guided: the ImageRAG references are actually uploaded. The first,
+        # unconditioned pass falls back to the keyless text-to-image endpoint.
+        from fashion.adapters.edit_pollinations import PollinationsEditGenerationProvider
+        from fashion.adapters.gen_pollinations import PollinationsGenerationProvider
+
+        return PollinationsEditGenerationProvider(
+            _pollinations_client(settings), fallback=PollinationsGenerationProvider()
+        )
+    if settings.generation_provider == "pollinations":
+        log.warning("generation_provider=pollinations but FASHION_POLLINATIONS_TOKEN is unset")
     if settings.generation_provider == "colab" and settings.colab_worker_url:
         from fashion.adapters.colab_worker import ColabGenerationProvider
 
@@ -124,8 +139,22 @@ def build_generation(settings: Settings | None = None) -> GenerationProvider:
     return NullGenerationProvider()
 
 
+def _pollinations_client(settings: Settings) -> PollinationsEditClient:
+    from fashion.adapters.edit_pollinations import PollinationsEditClient
+
+    return PollinationsEditClient(
+        settings.pollinations_token, model=settings.pollinations_edit_model
+    )
+
+
 def build_tryon(settings: Settings | None = None) -> TryOnProvider:
     settings = settings or load_settings()
+    if settings.tryon_provider == "pollinations" and settings.pollinations_token:
+        from fashion.adapters.edit_pollinations import PollinationsTryOnProvider
+
+        return PollinationsTryOnProvider(_pollinations_client(settings))
+    if settings.tryon_provider == "pollinations":
+        log.warning("tryon_provider=pollinations but FASHION_POLLINATIONS_TOKEN is unset")
     if settings.tryon_provider == "colab" and settings.colab_worker_url:
         from fashion.adapters.colab_worker import ColabTryOnProvider
 

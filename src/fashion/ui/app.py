@@ -317,6 +317,20 @@ def render_results(job: Job, photo: bytes, query_text: str = "") -> None:
             unsafe_allow_html=True,
         )
 
+    matched: dict[str, str] = {}
+    for rec in recommendations:
+        name = rec.get("celebrity_name")
+        if name and name not in matched:
+            matched[str(name)] = str(rec.get("celebrity_shape") or "")
+    if matched:
+        st.markdown(theme.sect("Celebrities who share your build"), unsafe_allow_html=True)
+        st.markdown(
+            theme.notice(
+                " &middot; ".join(f"<strong>{n}</strong> ({shape})" for n, shape in matched.items())
+            ),
+            unsafe_allow_html=True,
+        )
+
     for start in range(0, len(recommendations), 3):
         row = recommendations[start : start + 3]
         for offset, (column, rec) in enumerate(zip(st.columns(len(row)), row, strict=True)):
@@ -349,7 +363,15 @@ def render_results(job: Job, photo: bytes, query_text: str = "") -> None:
         )
 
     tryon_stage = job.stage(StageName.TRYON)
-    if tryon_stage.detail:
+    tryon_path = Path(str((tryon_stage.result or {}).get("image_path") or ""))
+    if (tryon_stage.result or {}).get("has_image") and tryon_path.exists():
+        st.markdown(theme.sect("You, wearing it"), unsafe_allow_html=True)
+        a, b = st.columns(2)
+        a.image(photo, caption="You", use_container_width=True)
+        b.image(
+            str(tryon_path), caption="You, wearing the generated outfit", use_container_width=True
+        )
+    elif tryon_stage.detail:
         st.markdown(theme.sect("Try-on"), unsafe_allow_html=True)
         st.markdown(theme.notice(tryon_stage.detail), unsafe_allow_html=True)
         first = Path(str(recommendations[0].get("image_path", "")))
@@ -399,7 +421,11 @@ def main() -> None:
             st.image(reference_upload, use_container_width=True)
 
     with form_col:
-        text = st.text_input("What you are looking for", value="festive ethnic wear")
+        text = st.text_input(
+            "What you are looking for",
+            value="indo-western festive wear: a bandhgala or nehru jacket over a kurta "
+            "with tailored trousers",
+        )
         a, b = st.columns(2)
         culture = a.selectbox("Style", ["any", *[c.value for c in Culture]])
         occasion = b.selectbox("Occasion", ["any", *[o.value for o in Occasion]])

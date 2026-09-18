@@ -36,6 +36,23 @@ from fashion.ports.vision import VisionModel
 log = logging.getLogger(__name__)
 
 
+SEED_REFERENCES = 3
+
+
+def _seed_references(recommendations: list[dict[str, object]]) -> tuple[tuple[str, bytes], ...]:
+    """The top retrieved outfits, as ImageRAG references for the first generation."""
+    out: list[tuple[str, bytes]] = []
+    for rec in recommendations:
+        if len(out) >= SEED_REFERENCES:
+            break
+        path = Path(str(rec.get("image_path", "")))
+        try:
+            out.append((str(rec.get("outfit_id", "")), path.read_bytes()))
+        except OSError:
+            continue
+    return tuple(out)
+
+
 def as_payload(rec: Recommendation) -> dict[str, object]:
     """Flatten a recommendation for the job result.
 
@@ -101,12 +118,20 @@ class RecommendationPipeline:
 
         recommendations = self._refine(job, metrics, query, recommendations)
 
-        self._generate(job, query, metrics, enabled=want_generation)
-        self._tryon(job, photo, recommendations, enabled=want_tryon)
+        generated = self._generate(job, query, metrics, recommendations, enabled=want_generation)
+        self._tryon(job, photo, recommendations, generated=generated, enabled=want_tryon)
 
         job.complete()
         self.jobs.save(job)
         return job
+
+    def _named(self, payload: list[dict[str, object]]) -> list[dict[str, object]]:
+        """Attach who wore each outfit and their body shape, so the match is visible."""
+        for rec in payload:
+            profile = self.profiles.get(str(rec.get("celebrity_id", "")))
+            rec["celebrity_name"] = profile.name if profile else None
+            rec["celebrity_shape"] = profile.shape.value if profile else None
+        return payload
 
     # -- stages -------------------------------------------------------------------
 
@@ -216,7 +241,7 @@ class RecommendationPipeline:
             return None
 
         self._last_recommendations = result.recommendations
-        payload: list[dict[str, object]] = [as_payload(rec) for rec in result.recommendations]
+        payload = self._named([as_payload(rec) for rec in result.recommendations])
 
         job.finish_stage(
             StageName.RETRIEVE,
@@ -278,7 +303,7 @@ class RecommendationPipeline:
             self.jobs.save(job)
             return recommendations
 
-        added = [as_payload(rec) for rec in result.added]
+        added = self._named([as_payload(rec) for rec in result.added])
         job.finish_stage(
             StageName.REFINE,
             state=StageState.DONE,
@@ -300,7 +325,16 @@ class RecommendationPipeline:
         self.jobs.save(job)
         return recommendations + added
 
-    def _generate(self, job: Job, query: UserQuery, metrics: BodyMetrics, *, enabled: bool) -> None:
+    def _generate(
+        self,
+        job: Job,
+        query: UserQuery,
+        metrics: BodyMetrics,
+        recommendations: list[dict[str, object]],
+        *,
+        enabled: bool,
+    ) -> bytes | None:
+        """Generate an outfit, returning the image so try-on can put it on the user."""
         job.start_stage(StageName.GENERATE)
         if not enabled or not self.generator.available:
             job.finish_stage(
@@ -314,19 +348,19 @@ class RecommendationPipeline:
                 ),
             )
             self.jobs.save(job)
-            return
+            return None
 
         try:
             result = ImageRagGenerator(
                 self.vision, self.embedder, self.store, self.generator
-            ).generate(query, metrics)
+            ).generate(query, metrics, seed_references=_seed_references(recommendations))
         except Exception as exc:
             log.warning("generation failed", exc_info=True)
             job.finish_stage(StageName.GENERATE, state=StageState.FAILED, detail=str(exc)[:200])
             self.jobs.save(job)
-            return
+            return None
 
-        image_path = self._save_generated(job.id, result.image)
+        image_path = self._save_generated(f"{job.id}", result.image)
         job.finish_stage(
             StageName.GENERATE,
             state=StageState.DONE if result.image else StageState.SKIPPED,
@@ -343,6 +377,7 @@ class RecommendationPipeline:
             detail=result.unavailable_reason or "",
         )
         self.jobs.save(job)
+        return result.image
 
     def _save_generated(self, job_id: str, image: bytes | None) -> str | None:
         if image is None:
@@ -364,8 +399,14 @@ class RecommendationPipeline:
         photo: bytes,
         recommendations: list[dict[str, object]],
         *,
+        generated: bytes | None = None,
         enabled: bool,
     ) -> None:
+        """Put the outfit on the user's own photo.
+
+        The generated outfit is preferred over the raw celebrity photo: it is the one
+        designed for this user, and a celebrity photo carries the celebrity with it.
+        """
         job.start_stage(StageName.TRYON)
         if not enabled or not self.tryon.available or not recommendations:
             job.finish_stage(
@@ -384,7 +425,7 @@ class RecommendationPipeline:
             return
 
         garment_path = Path(str(recommendations[0].get("image_path", "")))
-        if not garment_path.exists():
+        if generated is None and not garment_path.exists():
             job.finish_stage(
                 StageName.TRYON,
                 state=StageState.SKIPPED,
@@ -394,7 +435,8 @@ class RecommendationPipeline:
             return
 
         try:
-            rendered = self.tryon.try_on(photo, garment_path.read_bytes())
+            garment = generated if generated is not None else garment_path.read_bytes()
+            rendered = self.tryon.try_on(photo, garment)
         except Exception as exc:
             log.warning("try-on failed", exc_info=True)
             job.finish_stage(StageName.TRYON, state=StageState.FAILED, detail=str(exc)[:200])
@@ -406,6 +448,8 @@ class RecommendationPipeline:
             state=StageState.DONE if rendered else StageState.SKIPPED,
             result={
                 "has_image": rendered is not None,
+                "image_path": self._save_generated(f"{job.id}_tryon", rendered),
+                "garment": "generated" if generated is not None else "retrieved",
                 "outfit_id": recommendations[0].get("outfit_id"),
             },
             detail="" if rendered else "Try-on produced no image; showing side-by-side.",

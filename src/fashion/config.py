@@ -34,8 +34,12 @@ class Settings(BaseSettings):
     qdrant_api_key: str = ""
     qdrant_collection: str = "outfits"
 
-    generation_provider: Literal["null", "hosted", "colab"] = "hosted"
-    tryon_provider: Literal["null", "colab"] = "null"
+    generation_provider: Literal["null", "hosted", "pollinations", "colab"] = "hosted"
+    tryon_provider: Literal["null", "pollinations", "colab"] = "null"
+    # Authenticated Pollinations account: enables reference-guided generation and
+    # hosted try-on through the image edits endpoint. Each call spends balance.
+    pollinations_token: str = ""
+    pollinations_edit_model: str = "openai/gpt-image-1.5"
     colab_worker_url: str = ""
 
     redis_url: str = "redis://localhost:6379/0"
