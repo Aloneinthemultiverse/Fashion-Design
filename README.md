@@ -7,6 +7,31 @@ Matching is done on **body shape, not ethnicity**. An A-line anarkali flatters a
 frame for the same structural reasons an A-line sundress does; that equivalence is what
 lets the system bridge Western and Indian wardrobes.
 
+## Sample
+
+![Input photo, generated indo-western outfit, and the user wearing it](docs/images/sample_pipeline.jpg)
+
+| Stage | Result |
+|---|---|
+| Analyze | rectangle, athletic build (user-confirmed) |
+| Retrieve | 66 outfits from celebrities with the same shape |
+| Refine (ImageRAG) | gaps "nehru jacket or bandhgala" and "tailored trousers" filled from the corpus |
+| Generate | top 3 matched outfits used as references; converged in 1 round |
+| Try-on | generated outfit placed on the user's own photo |
+
+## Deploy (Hugging Face Space)
+
+Vercel cannot host this app (Streamlit needs a long-lived server, torch exceeds the
+function size limit, generation outlasts the request timeout). A free Docker Space can:
+
+```bash
+uv run hf auth login
+uv run python scripts/deploy_space.py --space <user>/fashion-atelier
+```
+
+The script uploads the code plus a compacted copy of the indexed images (539MB → 15MB).
+Then add the Space secrets `FASHION_GEMINI_API_KEY` and `FASHION_POLLINATIONS_TOKEN`.
+
 ## Quick start
 
 ```bash
